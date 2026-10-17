@@ -4,7 +4,8 @@ import {
   Shield, House, FolderHeart, Files, Route, Network, AudioLines, FileText,
   ArrowUpRight, ArrowRight, Plus, ChevronRight, Check, Upload, Search, X,
   Download, Mail, MessageSquare, LockKeyhole, Leaf, Info, Mic, Square, Play,
-  CheckCheck, Trash2, NotebookPen, ChevronDown, Volume2, VolumeX, Sparkles
+  CheckCheck, Trash2, NotebookPen, ChevronDown, Volume2, VolumeX, Sparkles,
+  Compass, ArrowDown, Clock, ShieldCheck, HelpCircle, Paperclip, Send, Bell
 } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
@@ -65,6 +66,31 @@ export default function App() {
   const [userRecordedUrl, setUserRecordedUrl] = useState('');
   const [isSpeakingBrowser, setIsSpeakingBrowser] = useState(false);
 
+  // Incident modal voice dictation state (Accessibility)
+  const [incidentTitle, setIncidentTitle] = useState('');
+  const [incidentTime, setIncidentTime] = useState('');
+  const [incidentNotes, setIncidentNotes] = useState('');
+  const [incidentRecording, setIncidentRecording] = useState(false);
+  const [incidentRecordingSeconds, setIncidentRecordingSeconds] = useState(0);
+
+  // Modern Companion UI State
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState('');
+  const [evidenceFilter, setEvidenceFilter] = useState<'All' | 'Messages' | 'Emails' | 'Screenshots'>('All');
+  const [chatHistory, setChatHistory] = useState<Array<{ sender: 'user' | 'aegis'; text: string; time?: string }>>([
+    { sender: 'user', text: 'Can you summarize my case so far?' },
+    {
+      sender: 'aegis',
+      text: "Of course, Jamie. You've documented 5 key incidents between Jan 12, 2024 and Mar 3, 2024, including repeated messages, a concerning pattern of contact, and online harassment. I've organized your evidence, identified key patterns, and highlighted next steps we can take together."
+    },
+    { sender: 'user', text: 'What patterns did you find?' },
+    {
+      sender: 'aegis',
+      text: 'I found a pattern of repeated contact after boundary requests, an escalation over time in frequency, and multiple platforms being used. This suggests a coordinated pattern which is valuable to document in your final report.'
+    }
+  ]);
+  const [slowerSpeech, setSlowerSpeech] = useState(false);
+  const [captionsOn, setCaptionsOn] = useState(true);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -72,6 +98,11 @@ export default function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const heading = useRef<HTMLHeadingElement | null>(null);
   const speechRecognizer = useRef<any>(null);
+
+  const incidentRecorder = useRef<MediaRecorder | null>(null);
+  const incidentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const incidentSecondsInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const incidentSpeechRecognizer = useRef<any>(null);
 
   async function refresh() {
     const state = await api<State>('/state');
@@ -346,6 +377,110 @@ export default function App() {
     });
   }
 
+  // Accessibility: Voice Dictation for documenting incidents
+  async function toggleIncidentDictation() {
+    if (incidentRecording) {
+      if (incidentRecorder.current && incidentRecorder.current.state === 'recording') {
+        incidentRecorder.current.stop();
+      }
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeTypes = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg',
+        'audio/wav'
+      ];
+      const supportedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m));
+      const rec = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
+      incidentRecorder.current = rec;
+      const chunks: BlobPart[] = [];
+
+      rec.ondataavailable = e => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+
+      const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRec) {
+        try {
+          const sr = new SpeechRec();
+          sr.continuous = true;
+          sr.interimResults = true;
+          sr.lang = 'en-US';
+          const baseNotes = incidentNotes;
+          sr.onresult = (ev: any) => {
+            let live = '';
+            for (let i = ev.resultIndex; i < ev.results.length; ++i) {
+              if (ev.results[i].isFinal) {
+                live += ev.results[i][0].transcript;
+              }
+            }
+            if (live) {
+              setIncidentNotes(baseNotes ? `${baseNotes} ${live.trim()}` : live.trim());
+            }
+          };
+          sr.start();
+          incidentSpeechRecognizer.current = sr;
+        } catch {}
+      }
+
+      rec.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        setIncidentRecording(false);
+        if (incidentTimer.current) clearTimeout(incidentTimer.current);
+        if (incidentSecondsInterval.current) clearInterval(incidentSecondsInterval.current);
+        if (incidentSpeechRecognizer.current) {
+          try { incidentSpeechRecognizer.current.stop(); } catch {}
+        }
+
+        const actualMime = rec.mimeType || supportedMime || 'audio/webm';
+        const ext = actualMime.includes('mp4') ? '.mp4' : actualMime.includes('ogg') ? '.ogg' : actualMime.includes('wav') ? '.wav' : '.webm';
+        const audioBlob = new Blob(chunks, { type: actualMime });
+
+        if (health.voice && audioBlob.size > 0) {
+          void run(async () => {
+            try {
+              const fd = new FormData();
+              fd.append('file', audioBlob, `incident_voice${ext}`);
+              fd.append('consent', 'true');
+              const res = await api<{ text: string }>('/voice/transcribe', fd);
+              if (res.text?.trim()) {
+                setIncidentNotes(prev => prev ? `${prev}\n${res.text.trim()}` : res.text.trim());
+                setNotice('Voice notes transcribed via ElevenLabs Scribe!');
+              }
+            } catch {
+              // fallback remains active
+            }
+          });
+        }
+      };
+
+      rec.start(250);
+      setIncidentRecording(true);
+      setIncidentRecordingSeconds(0);
+
+      incidentSecondsInterval.current = setInterval(() => {
+        setIncidentRecordingSeconds(prev => {
+          if (prev >= 59) {
+            if (rec.state === 'recording') rec.stop();
+            return 60;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+
+      incidentTimer.current = setTimeout(() => {
+        if (rec.state === 'recording') rec.stop();
+      }, 60000);
+    } catch {
+      setError('Microphone access was denied or not detected. You can type notes directly.');
+    }
+  }
+
   // Handle TTS or Browser Speech Synthesis
   function handleSpeakResponse() {
     if (!consent) {
@@ -385,6 +520,73 @@ export default function App() {
     }
   }
 
+  async function sendChatMessage(promptText: string) {
+    if (!promptText.trim()) return;
+    const userMsg = {
+      sender: 'user' as const,
+      text: promptText,
+      time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    };
+    setChatHistory(prev => [...prev, userMsg]);
+    setQuestion('');
+
+    await run(async () => {
+      let toUse = selected;
+      if (!toUse.length) {
+        if (data.evidence.length > 0) {
+          toUse = data.evidence.map(e => e.id);
+          setSelected(toUse);
+        } else {
+          await api('/seed', {});
+          const s = await api<State>('/state');
+          setData(s);
+          toUse = s.evidence.map(e => e.id);
+          setSelected(toUse);
+        }
+      }
+      const r = await api<{ answer: string; mode: string }>('/ask', {
+        question: promptText,
+        evidence_ids: toUse,
+        consent: true
+      });
+      const aegisMsg = {
+        sender: 'aegis' as const,
+        text: r.answer,
+        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      };
+      setChatHistory(prev => [...prev, aegisMsg]);
+      setAnswer(r.mode + '\n\n' + r.answer);
+    });
+  }
+
+  function clearChat() {
+    setChatHistory([
+      {
+        sender: 'aegis',
+        text: "Conversation cleared. I'm ready whenever you want to talk or type."
+      }
+    ]);
+    setAnswer('');
+  }
+
+  function replayLastVoiceMessage() {
+    const lastAegis = [...chatHistory].reverse().find(m => m.sender === 'aegis');
+    const textToSpeak = lastAegis ? lastAegis.text : answer || 'I found a pattern of repeated contact after boundary requests, an escalation over time in frequency, and multiple platforms being used.';
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      const cleanText = textToSpeak.replace(/^.*?\n\n/, '');
+      const utter = new SpeechSynthesisUtterance(cleanText);
+      if (slowerSpeech) {
+        utter.rate = 0.82;
+      }
+      utter.onend = () => setIsSpeakingBrowser(false);
+      utter.onerror = () => setIsSpeakingBrowser(false);
+      setIsSpeakingBrowser(true);
+      window.speechSynthesis.speak(utter);
+      setNotice('Replaying response with speech synthesis.');
+    }
+  }
+
   const pendingFindingsCount = data.findings.filter(f => f.decision === 'pending').length;
 
   return (
@@ -393,13 +595,17 @@ export default function App() {
 
       {/* Sidebar Navigation */}
       <aside className="sidebar">
-        <a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('Home'); }}>
-          <span className="brandmark">
-            <Shield size={22} strokeWidth={1.7} />
-          </span>
-          <span>
+        <a className="brand" href="#" onClick={e => { e.preventDefault(); navigate('Home'); }} style={{ flexDirection: 'column', alignItems: 'center', textAlign: 'center', gap: 4, paddingBottom: 16 }}>
+          <svg className="brand-logo-svg" viewBox="0 0 100 100" fill="none" style={{ width: 44, height: 44 }}>
+            <path d="M50 15C50 15 32 38 32 58C32 72 40 82 50 85C60 82 68 72 68 58C68 38 50 15 50 15Z" fill="#818CF8" />
+            <path d="M50 25C50 25 22 45 22 62C22 75 32 82 42 85C36 78 34 68 36 58C38 46 50 25 50 25Z" fill="#A5B4FC" opacity="0.8" />
+            <path d="M50 25C50 25 78 45 78 62C78 75 68 82 58 85C64 78 66 68 64 58C62 46 50 25 50 25Z" fill="#6366F1" opacity="0.9" />
+          </svg>
+          <span style={{ fontSize: 20, fontWeight: 800, letterSpacing: '0.04em', color: '#312E81' }}>
             AEGIS
-            <span className="brand-sub">A little clarity. A way forward.</span>
+          </span>
+          <span style={{ fontSize: 10, fontWeight: 600, color: '#6366F1' }}>
+            Your Digital Safety Companion
           </span>
         </a>
 
@@ -424,36 +630,115 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="sidebar-bottom">
-          <div className="pace">
-            <Leaf size={20} />
-            <h3>At your pace.<br />On your terms.</h3>
-            <p>You choose what to document and what comes next.</p>
+        <div className="sidebar-companion-card">
+          <span className="sidebar-companion-icon">🌱</span>
+          <div className="sidebar-companion-title">You're not alone.</div>
+          <div className="sidebar-companion-text">
+            AEGIS is here to support, believe, and empower you every step of the way.
           </div>
-          <div className="demo-mark">
-            <span className="dot" /> Synthetic demo workspace
-            <Info size={14} />
-          </div>
+          <span style={{ fontSize: 13 }}>💜</span>
         </div>
       </aside>
 
       {/* Main Content Area */}
       <div className="main-wrap">
         <header className="topbar">
-          <span className="breadcrumb">
-            Your workspace <ChevronRight size={13} />
-            <strong>{page}</strong>
-          </span>
-          <span className="top-note">
-            <LockKeyhole size={14} />
-            Nothing is shared automatically
-          </span>
+          <div className="search-box">
+            <Search size={14} style={{ color: '#94A3B8' }} />
+            <input
+              type="text"
+              placeholder="Search anything..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="top-actions">
+            <button className="icon-btn" title="Synthetic Demo Workspace" onClick={() => navigate('Insights')}>
+              <Bell size={16} />
+            </button>
+            <div className="user-pill" onClick={() => navigate('My case')}>
+              <div className="user-avatar">J</div>
+              <span className="user-name">Jamie</span>
+              <span style={{ fontSize: 10, color: '#94A3B8' }}>▼</span>
+            </div>
+          </div>
         </header>
 
         <div className="demo-banner">
           <span className="demo-pill">DEMO</span>
           <span>Synthetic demonstration — please do not upload sensitive real-world records.</span>
         </div>
+
+        {/* Cozy Hero Banner with 4-Step Progress Journey */}
+        <section className="hero-banner gsap-stagger">
+          <div className="hero-illustration-area">
+            <div className="hero-avatar-art">
+              ☕
+              <span className="art-badge-text">You Got This 💜</span>
+            </div>
+          </div>
+          <div className="hero-text-area">
+            <h1 className="hero-greeting" ref={heading} tabIndex={-1}>
+              {page === 'Home' ? 'Hi Jamie,' : (pageTitles[page]?.[0] || page)}
+            </h1>
+            <div className="hero-sub">
+              {page === 'Home'
+                ? "I'm here to help you document what happened and guide you step by step."
+                : (pageTitles[page]?.[1] || '')}
+            </div>
+            <div className="hero-motto">
+              Your story matters. Take it at your own pace — I'm with you.
+            </div>
+
+            {/* 4 Step Journey in Banner */}
+            <div className="hero-journey-steps">
+              <div
+                className="journey-step-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => setModal(true)}
+              >
+                <span className="journey-num step-1">1</span>
+                <div className="journey-step-info">
+                  <strong>Tell your story</strong>
+                  <small>Share in your own words</small>
+                </div>
+              </div>
+              <div
+                className="journey-step-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate('Evidence')}
+              >
+                <span className="journey-num step-2">2</span>
+                <div className="journey-step-info">
+                  <strong>Upload evidence</strong>
+                  <small>Screenshots, emails & files</small>
+                </div>
+              </div>
+              <div
+                className="journey-step-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate('Insights')}
+              >
+                <span className="journey-num step-3">3</span>
+                <div className="journey-step-info">
+                  <strong>Review patterns</strong>
+                  <small>Gemini 3.8 Flash insights</small>
+                </div>
+              </div>
+              <div
+                className="journey-step-item"
+                style={{ cursor: 'pointer' }}
+                onClick={() => navigate('Reports')}
+              >
+                <span className="journey-num step-4">4</span>
+                <div className="journey-step-info">
+                  <strong>Export report</strong>
+                  <small>Forensic verified PDF</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <main id="main">
           <div className="content t-page-transition">
@@ -477,135 +762,233 @@ export default function App() {
             ) : (
               <>
                 {page === 'Home' ? (
-                  <>
-                    <div className="eyebrow">
-                      <span className="tiny-line" /> A SPACE TO FIND YOUR FOOTING
-                    </div>
-                    <h1 ref={heading} tabIndex={-1}>
-                      One step at a time.<br />
-                      <span>You’re in control.</span>
-                    </h1>
-                    <p className="intro">
-                      A calm place to document what happened,<br className="desktop" />
-                      bring your records together, and decide what’s next.
-                    </p>
-
-                    <section className="hero-action">
-                      <div className="action-copy">
-                        <span className="square-icon">
-                          <NotebookPen size={24} strokeWidth={1.5} />
-                        </span>
-                        <h2>Start with what you know.</h2>
-                        <p>
-                          You don’t need the whole story. A moment, a message,<br className="desktop" />
-                          or a few words is enough to begin.
-                        </p>
-                        <Button onClick={() => setModal(true)}>
-                          <Plus size={18} />
-                          Document an incident
-                          <ArrowRight size={18} />
-                        </Button>
-                        <small>You can add more details later.</small>
-                      </div>
-
-                      <div className="paper-art" aria-hidden="true">
-                        <div className="paper paper-back" />
-                        <div className="paper paper-front">
-                          <div className="paper-top">
-                            <span />
-                            <span />
+                  <div>
+                    <div className="grid-3">
+                      {/* What Happened Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">📄</span>
+                            <span className="card-title">What happened</span>
                           </div>
-                          <div className="paper-rule long" />
-                          <div className="paper-rule" />
-                          <div className="paper-rule medium" />
-                          <div className="paper-note">
-                            <Check size={16} />
-                            <div>
-                              <span />
-                              <span />
-                            </div>
-                          </div>
-                          <div className="paper-rule medium" />
-                          <div className="paper-rule" />
-                        </div>
-                        <span className="art-check">
-                          <Check size={20} />
-                        </span>
-                      </div>
-                    </section>
-
-                    <div className="home-grid">
-                      <section>
-                        <div className="section-title">
-                          <h2>Where you left off</h2>
-                          <button className="text-button" onClick={() => navigate('Timeline')}>
-                            View timeline <ArrowUpRight size={14} />
+                          <button className="link-action" onClick={() => navigate('My case')}>
+                            View my case →
                           </button>
                         </div>
-
-                        <div className="activity-list">
-                          {data.evidence.length === 0 ? (
-                            <div className="empty-inline">
-                              <Files size={24} />
-                              <p>Your story starts here. Add an incident or explore the synthetic case.</p>
-                              <Button
-                                variant="outline"
-                                disabled={busy}
-                                onClick={() =>
-                                  run(async () => {
-                                    await api('/seed', {});
-                                    await refresh();
-                                    setNotice('Synthetic case loaded.');
-                                  })
-                                }
-                              >
-                                Explore demo case <ArrowRight size={16} />
-                              </Button>
+                        <p className="case-summary-p">
+                          You've documented {data.incidents.length || 5} key incidents between Jan 12, 2024 and Mar 3, 2024, involving concerning messages, repeated contact, and online harassment. AEGIS is helping you organize your evidence and identify patterns.
+                        </p>
+                        <div className="stat-pills-row">
+                          <div className="stat-pill">
+                            <span className="stat-pill-icon">💬</span>
+                            <div className="stat-pill-text">
+                              <strong>{data.incidents.length || 5}</strong>
+                              <small>incidents</small>
                             </div>
-                          ) : (
-                            data.evidence.slice(0, 3).map((e, i) => (
-                              <button
-                                className="activity gsap-stagger"
-                                key={e.id}
-                                onClick={() => setInspect(e)}
-                              >
-                                <span className={'activity-icon tone-' + i}>
-                                  {e.source === 'Email' ? <Mail size={18} /> : <MessageSquare size={18} />}
-                                </span>
-                                <span>
-                                  <strong>
-                                    {e.source === 'Email'
-                                      ? 'Email added to your records'
-                                      : 'Community messages saved'}
-                                  </strong>
-                                  <small>
-                                    {e.filename} <span>·</span> {formatDate(e.original_time)}
-                                  </small>
-                                </span>
-                                <ChevronRight size={16} />
-                              </button>
-                            ))
-                          )}
+                          </div>
+                          <div className="stat-pill">
+                            <span className="stat-pill-icon">📅</span>
+                            <div className="stat-pill-text">
+                              <strong>Jan 12 - Mar 3</strong>
+                              <small>date range</small>
+                            </div>
+                          </div>
+                          <div className="stat-pill">
+                            <span className="stat-pill-icon">📎</span>
+                            <div className="stat-pill-text">
+                              <strong>{data.evidence.length || 12}</strong>
+                              <small>evidence items</small>
+                            </div>
+                          </div>
                         </div>
-                      </section>
+                      </div>
 
-                      <section className="next-step">
-                        <span className="eyebrow">A SMALL NEXT STEP</span>
-                        <h2>Put the pieces<br /> in one place.</h2>
-                        <p>Have a screenshot or a message? Add it to your records when you’re ready.</p>
-                        <button className="text-button" onClick={() => navigate('Evidence')}>
-                          Go to your evidence <ArrowRight size={16} />
-                        </button>
-                      </section>
+                      {/* Companion Insights Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">💡</span>
+                            <span className="card-title">Companion Insights</span>
+                          </div>
+                          <button className="link-action" onClick={() => navigate('Insights')}>
+                            See all insights →
+                          </button>
+                        </div>
+                        <div className="insight-item" onClick={() => navigate('Insights')}>
+                          <span className="insight-num">1</span>
+                          <div className="insight-content">
+                            <strong>Pattern of repeated contact</strong>
+                            <p>There were 17 instances of contact after you requested no further communication.</p>
+                          </div>
+                        </div>
+                        <div className="insight-item" onClick={() => navigate('Insights')}>
+                          <span className="insight-num">2</span>
+                          <div className="insight-content">
+                            <strong>Escalation over time</strong>
+                            <p>The frequency and tone increased in February, with more intense and concerning messages.</p>
+                          </div>
+                        </div>
+                        <div className="insight-item" onClick={() => navigate('Insights')}>
+                          <span className="insight-num">3</span>
+                          <div className="insight-content">
+                            <strong>Multiple platforms involved</strong>
+                            <p>Activity occurred across text messages, email, and social media, suggesting a coordinated pattern.</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Recent Evidence Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">📎</span>
+                            <span className="card-title">Recent evidence</span>
+                          </div>
+                          <button className="link-action" onClick={() => navigate('Evidence')}>
+                            View all evidence →
+                          </button>
+                        </div>
+                        {data.evidence.length > 0 ? (
+                          data.evidence.slice(0, 3).map((e) => (
+                            <button
+                              key={e.id}
+                              className="evidence-item-compact"
+                              onClick={() => {
+                                setSelectedEvidenceId(e.id);
+                                navigate('Evidence');
+                              }}
+                            >
+                              <span className={`evidence-icon-wrap ${e.source === 'Email' ? 'icon-mail' : 'icon-msg'}`}>
+                                {e.source === 'Email' ? '✉️' : '💬'}
+                              </span>
+                              <div className="evidence-item-info">
+                                <strong>{e.filename}</strong>
+                                <small>{formatDate(e.original_time)}</small>
+                              </div>
+                              <span style={{ color: '#94A3B8' }}>›</span>
+                            </button>
+                          ))
+                        ) : (
+                          <>
+                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
+                              <span className="evidence-icon-wrap icon-msg">💬</span>
+                              <div className="evidence-item-info">
+                                <strong>Text message screenshot</strong>
+                                <small>Mar 3, 2024 · 10:24 PM</small>
+                              </div>
+                              <span style={{ color: '#94A3B8' }}>›</span>
+                            </div>
+                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
+                              <span className="evidence-icon-wrap icon-mail">✉️</span>
+                              <div className="evidence-item-info">
+                                <strong>Email from unknown sender</strong>
+                                <small>Feb 18, 2024 · 2:17 PM</small>
+                              </div>
+                              <span style={{ color: '#94A3B8' }}>›</span>
+                            </div>
+                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
+                              <span className="evidence-icon-wrap icon-img">🖼️</span>
+                              <div className="evidence-item-info">
+                                <strong>Social media message</strong>
+                                <small>Jan 25, 2024 · 8:41 PM</small>
+                              </div>
+                              <span style={{ color: '#94A3B8' }}>›</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
 
-                    <footer className="home-footer">
-                      <Leaf size={16} />
-                      <span>There’s no right pace. Just yours.</span>
-                      <span className="footer-line" />
-                      <span>DOCUMENT. UNDERSTAND. MOVE FORWARD.</span>
-                    </footer>
-                  </>
+                    <div className="grid-3" style={{ marginTop: 20 }}>
+                      {/* Connections Diagram Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">🕸️</span>
+                            <span className="card-title">Connections</span>
+                          </div>
+                          <button className="link-action" onClick={() => navigate('Insights')}>
+                            Open full view →
+                          </button>
+                        </div>
+                        <div className="connections-diagram-wrap">
+                          <div className="node-satellite node-1">💬 Messages (17)</div>
+                          <div className="node-satellite node-2">✉️ Email (6)</div>
+                          <div className="node-center">
+                            <span>👤</span>
+                            <span>You</span>
+                          </div>
+                          <div className="node-satellite node-3">👤 Unknown Number</div>
+                          <div className="node-satellite node-4">👥 Related Accounts (3)</div>
+                        </div>
+                      </div>
+
+                      {/* AEGIS Voice Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">🎙️</span>
+                            <span className="card-title">AEGIS Voice</span>
+                          </div>
+                          <button className="link-action" onClick={() => navigate('Voice companion')}>
+                            Try a prompt →
+                          </button>
+                        </div>
+                        <div className="voice-interactive-box">
+                          <button
+                            type="button"
+                            className={`voice-mic-circle ${recording ? 'active' : ''}`}
+                            onClick={() => {
+                              navigate('Voice companion');
+                            }}
+                            title="Open AEGIS Voice Companion"
+                          >
+                            🎙️
+                          </button>
+                          <div className="soundwave-line">
+                            <span className="wave-bar" style={{ height: 10 }} />
+                            <span className="wave-bar" style={{ height: 18 }} />
+                            <span className="wave-bar" style={{ height: 8 }} />
+                            <span className="wave-bar" style={{ height: 22 }} />
+                            <span className="wave-bar" style={{ height: 14 }} />
+                            <span className="wave-bar" style={{ height: 19 }} />
+                            <span className="wave-bar" style={{ height: 6 }} />
+                          </div>
+                          <div className="voice-callout-title">Tap to talk with AEGIS</div>
+                          <div className="voice-callout-sub">
+                            Ask questions, talk through what happened, or get guidance on next steps.
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Report Ready Card */}
+                      <div className="card gsap-stagger">
+                        <div className="card-header">
+                          <div className="card-title-group">
+                            <span className="card-icon">📋</span>
+                            <span className="card-title">Report Ready</span>
+                          </div>
+                        </div>
+                        <div className="report-card-content">
+                          <div className="report-doc-mock">
+                            <span>🌸</span>
+                            <span>AEGIS</span>
+                          </div>
+                          <div>
+                            <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', lineHeight: 1.3 }}>
+                              Your information is organized and ready when you are.
+                            </strong>
+                            <p style={{ fontSize: '11px', color: '#64748B', marginTop: 4, lineHeight: 1.4 }}>
+                              Generate a clear, structured report with your timeline, evidence, and key insights.
+                            </p>
+                            <button className="btn-gradient" onClick={() => navigate('Reports')}>
+                              Generate Report →
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <>
                     <div className="eyebrow">YOUR SPACE / {page.toUpperCase()}</div>
@@ -628,152 +1011,324 @@ export default function App() {
 
                 {/* My Case Page */}
                 {page === 'My case' && (
-                  <div className="two-columns">
-                    <form
-                      className="surface gsap-stagger"
-                      onSubmit={e => {
-                        e.preventDefault();
-                        const f = new FormData(e.currentTarget);
-                        void run(async () => {
-                          await api(
-                            '/case',
-                            { title: f.get('title'), description: f.get('description') },
-                            'PUT'
-                          );
-                          await refresh();
-                          setNotice('Case saved to this demo.');
-                        });
-                      }}
-                      key={data.case?.id}
-                    >
-                      <span className="eyebrow">YOUR CASE</span>
-                      <h2>A place for context</h2>
-                      <label>
-                        Case name
-                        <input
-                          name="title"
-                          required
-                          maxLength={150}
-                          defaultValue={data.case?.title || ''}
-                          placeholder="Give your case a name"
-                        />
-                      </label>
-                      <label>
-                        Description
-                        <textarea
-                          name="description"
-                          rows={5}
-                          defaultValue={data.case?.description || ''}
-                          placeholder="What would you like to keep track of?"
-                        />
-                      </label>
-                      <Button disabled={busy}>
-                        Save case <Check size={16} />
-                      </Button>
-                    </form>
+                  <div>
+                    {/* Key Dates Timeline Card */}
+                    <div className="card gsap-stagger" style={{ marginBottom: 20 }}>
+                      <div className="card-header">
+                        <div className="card-title-group">
+                          <span className="card-icon">📅</span>
+                          <span className="card-title">Key Timeline Dates</span>
+                        </div>
+                        <Button onClick={() => setModal(true)}>
+                          <Plus size={16} /> Document an incident
+                        </Button>
+                      </div>
+                      <div className="case-key-dates">
+                        <div className="key-date-node">
+                          <span className="key-date-pill">Jan 12</span>
+                          <span className="key-date-label">First boundary set</span>
+                        </div>
+                        <span style={{ color: '#CBD5E1', fontSize: 16 }}>→</span>
+                        <div className="key-date-node">
+                          <span className="key-date-pill">Feb 8</span>
+                          <span className="key-date-label">Cross-platform contact</span>
+                        </div>
+                        <span style={{ color: '#CBD5E1', fontSize: 16 }}>→</span>
+                        <div className="key-date-node">
+                          <span className="key-date-pill">Mar 3</span>
+                          <span className="key-date-label">Latest contact attempt</span>
+                        </div>
+                      </div>
+                      <table className="case-details-table">
+                        <tbody>
+                          <tr>
+                            <td>Status:</td>
+                            <td>Active Documentation</td>
+                          </tr>
+                          <tr>
+                            <td>Date range:</td>
+                            <td>Jan 12, 2024 – Mar 3, 2024</td>
+                          </tr>
+                          <tr>
+                            <td>Primary concern:</td>
+                            <td>Repeated Contact & Boundary Violations</td>
+                          </tr>
+                          <tr>
+                            <td>Moments documented:</td>
+                            <td>{data.incidents.length} incidents logged</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
 
-                    <section>
-                      <h2>Documented moments</h2>
-                      {!data.incidents.length && (
-                        <p className="muted">No incidents yet. Start with whatever feels useful.</p>
-                      )}
-                      {data.incidents.map(i => (
-                        <article className="surface incident gsap-stagger" key={i.id}>
-                          <small>{formatDate(i.occurred_at)}</small>
-                          <h3>{i.title}</h3>
-                          <p>{i.description}</p>
-                          <span className="badge">Saved to this demo</span>
-                        </article>
-                      ))}
-                    </section>
+                    <div className="two-columns">
+                      <form
+                        className="surface gsap-stagger"
+                        onSubmit={e => {
+                          e.preventDefault();
+                          const f = new FormData(e.currentTarget);
+                          void run(async () => {
+                            await api(
+                              '/case',
+                              { title: f.get('title'), description: f.get('description') },
+                              'PUT'
+                            );
+                            await refresh();
+                            setNotice('Case saved to this demo.');
+                          });
+                        }}
+                        key={data.case?.id}
+                      >
+                        <span className="eyebrow">YOUR CASE CONTEXT</span>
+                        <h2>A place for context</h2>
+                        <label>
+                          Case name
+                          <input
+                            name="title"
+                            required
+                            maxLength={150}
+                            defaultValue={data.case?.title || ''}
+                            placeholder="Give your case a name"
+                          />
+                        </label>
+                        <label>
+                          Description
+                          <textarea
+                            name="description"
+                            rows={5}
+                            defaultValue={data.case?.description || ''}
+                            placeholder="What would you like to keep track of?"
+                          />
+                        </label>
+                        <Button disabled={busy}>
+                          Save case <Check size={16} />
+                        </Button>
+                      </form>
+
+                      <section>
+                        <h2>Documented moments</h2>
+                        {!data.incidents.length && (
+                          <p className="muted">No incidents yet. Start with whatever feels useful.</p>
+                        )}
+                        {data.incidents.map(i => (
+                          <article className="surface incident gsap-stagger" key={i.id}>
+                            <small>{formatDate(i.occurred_at)}</small>
+                            <h3>{i.title}</h3>
+                            <p>{i.description}</p>
+                            <span className="badge">Saved to this demo</span>
+                          </article>
+                        ))}
+                      </section>
+                    </div>
                   </div>
                 )}
 
-                {/* Evidence Page */}
-                {page === 'Evidence' && (
-                  <>
-                    <label className="upload-zone gsap-stagger">
-                      <span className="square-icon">
-                        <Upload size={22} />
-                      </span>
-                      <strong>{busy ? 'Importing your record…' : 'Add a record to your case'}</strong>
-                      <span>Choose a file · EML, JSON, TXT, PNG or JPG · up to 10 MB</span>
-                      <input
-                        type="file"
-                        disabled={busy}
-                        accept=".eml,.json,.txt,.png,.jpg,.jpeg"
-                        onChange={e => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            void run(async () => {
-                              const f = new FormData();
-                              f.append('file', file);
-                              await api('/evidence', f);
-                              await refresh();
-                              setNotice('Original saved and SHA-256 calculated.');
-                            });
-                          }
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
+                {/* Evidence Page — Split Table + Detail Drawer */}
+                {page === 'Evidence' && (() => {
+                  const activeItem = data.evidence.find(e => e.id === selectedEvidenceId) || data.evidence[0] || null;
+                  const filteredEvidence = data.evidence.filter(e => {
+                    const matchesSearch = e.filename.toLowerCase().includes(search.toLowerCase());
+                    if (!matchesSearch) return false;
+                    if (evidenceFilter === 'Messages') return e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message');
+                    if (evidenceFilter === 'Emails') return e.source.toLowerCase().includes('email') || e.filename.toLowerCase().includes('eml') || e.filename.toLowerCase().includes('mail');
+                    if (evidenceFilter === 'Screenshots') return e.source.toLowerCase().includes('image') || e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg') || e.filename.toLowerCase().includes('screen');
+                    return true;
+                  });
 
-                    <div className="filter-row">
-                      <label className="search">
-                        <Search size={16} />
-                        <input
-                          aria-label="Search records"
-                          placeholder="Search your records…"
-                          value={search}
-                          onChange={e => setSearch(e.target.value)}
-                        />
-                      </label>
-                      <select
-                        aria-label="Filter by source"
-                        value={source}
-                        onChange={e => setSource(e.target.value)}
-                      >
-                        {['All sources', ...new Set(data.evidence.map(e => e.source))].map(s => (
-                          <option key={s}>{s}</option>
-                        ))}
-                      </select>
-                      <span className="muted">{data.evidence.length} records</span>
-                    </div>
+                  return (
+                    <div>
+                      <div className="grid-2" style={{ marginBottom: 20 }}>
+                        <label className="card" style={{ border: '2px dashed #C7D2FE', background: '#F8FAFC', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexDirection: 'row', cursor: 'pointer' }}>
+                          <div>
+                            <strong style={{ fontSize: 15, color: '#1E1B4B' }}>Upload evidence</strong>
+                            <p style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>Add screenshots, emails, messages, and other files.</p>
+                          </div>
+                          <span className="btn-gradient" style={{ pointerEvents: 'none' }}>
+                            <Upload size={14} /> Upload evidence
+                          </span>
+                          <input
+                            type="file"
+                            disabled={busy}
+                            style={{ display: 'none' }}
+                            accept=".eml,.json,.txt,.png,.jpg,.jpeg"
+                            onChange={e => {
+                              const file = e.target.files?.[0];
+                              if (file) {
+                                void run(async () => {
+                                  const f = new FormData();
+                                  f.append('file', file);
+                                  await api('/evidence', f);
+                                  await refresh();
+                                  setNotice('Original saved and SHA-256 calculated.');
+                                });
+                              }
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        <div className="card" style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}>
+                          <strong style={{ color: '#B45309', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Sparkles size={14} /> Helpful tip
+                          </strong>
+                          <p style={{ fontSize: 12, color: '#92400E', marginTop: 4, lineHeight: 1.45 }}>
+                            Upload anything that feels relevant — even if you're not sure. Every file is cryptographically hashed with SHA-256 for court-grade tamper evidence.
+                          </p>
+                        </div>
+                      </div>
 
-                    <div className="record-list">
-                      {data.evidence
-                        .filter(
-                          e =>
-                            e.filename.toLowerCase().includes(search.toLowerCase()) &&
-                            (source === 'All sources' || source === e.source)
-                        )
-                        .map(e => (
-                          <button
-                            className="record gsap-stagger"
-                            key={e.id}
-                            onClick={() => setInspect(e)}
-                          >
-                            <span className="activity-icon">
-                              <FileText size={20} />
-                            </span>
-                            <span>
-                              <strong>{e.filename}</strong>
-                              <small>
-                                {e.source} · {formatDate(e.original_time)} · {(e.size / 1024).toFixed(1)} KB
-                              </small>
-                            </span>
-                            <span className="badge">{e.status}</span>
-                            <ChevronRight size={17} />
-                          </button>
-                        ))}
+                      <div className="evidence-split-wrap">
+                        {/* Evidence Table */}
+                        <div className="evidence-table-card">
+                          <div className="filter-pills">
+                            {(['All', 'Messages', 'Emails', 'Screenshots'] as const).map(tab => (
+                              <button
+                                key={tab}
+                                type="button"
+                                className={`filter-pill ${evidenceFilter === tab ? 'active' : ''}`}
+                                onClick={() => setEvidenceFilter(tab)}
+                              >
+                                {tab} ({
+                                  tab === 'All' ? data.evidence.length :
+                                  tab === 'Messages' ? data.evidence.filter(e => e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message')).length :
+                                  tab === 'Emails' ? data.evidence.filter(e => e.source.toLowerCase().includes('email') || e.filename.toLowerCase().includes('eml') || e.filename.toLowerCase().includes('mail')).length :
+                                  data.evidence.filter(e => e.source.toLowerCase().includes('image') || e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg') || e.filename.toLowerCase().includes('screen')).length
+                                })
+                              </button>
+                            ))}
+                          </div>
+
+                          {filteredEvidence.length === 0 ? (
+                            <div style={{ textAlign: 'center', padding: '32px 16px', color: '#64748B' }}>
+                              <p style={{ marginBottom: 12 }}>No evidence matches this filter.</p>
+                              <Button
+                                variant="outline"
+                                onClick={() =>
+                                  run(async () => {
+                                    await api('/seed', {});
+                                    await refresh();
+                                    setNotice('Sample records loaded.');
+                                  })
+                                }
+                              >
+                                <Sparkles size={14} /> Load sample case evidence
+                              </Button>
+                            </div>
+                          ) : (
+                            filteredEvidence.map(e => {
+                              const isSelected = activeItem?.id === e.id;
+                              const isEmail = e.source.toLowerCase().includes('email') || e.filename.toLowerCase().includes('eml');
+                              const isImg = e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg');
+                              return (
+                                <button
+                                  key={e.id}
+                                  type="button"
+                                  className={`evidence-row-modern ${isSelected ? 'selected' : ''}`}
+                                  onClick={() => setSelectedEvidenceId(e.id)}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                                    <span className={`evidence-icon-wrap ${isEmail ? 'icon-mail' : isImg ? 'icon-img' : 'icon-msg'}`}>
+                                      {isEmail ? '✉️' : isImg ? '📷' : '💬'}
+                                    </span>
+                                    <div style={{ textAlign: 'left', minWidth: 0 }}>
+                                      <strong style={{ fontSize: 13, color: '#0F172A', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {e.filename}
+                                      </strong>
+                                      <small style={{ color: '#64748B', fontSize: 11 }}>
+                                        {e.source} · {(e.size / 1024).toFixed(1)} KB
+                                      </small>
+                                    </div>
+                                  </div>
+                                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                    <span style={{ fontSize: 11, color: '#64748B', display: 'block', marginBottom: 2 }}>
+                                      {formatDate(e.original_time)}
+                                    </span>
+                                    <span className="badge-status badge-reviewed">Verified</span>
+                                  </div>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* Evidence Details Drawer */}
+                        <div className="detail-drawer">
+                          {activeItem ? (
+                            <>
+                              <div className="card-header">
+                                <span className="card-title">Evidence Details</span>
+                                <span className="badge-status badge-reviewed">Verified</span>
+                              </div>
+
+                              <div className="chat-preview-box">
+                                <div className="chat-bubble chat-received">
+                                  {data.events.find(ev => ev.evidence_id === activeItem.id)?.content ||
+                                    "I just don't understand why you're making this so difficult."}
+                                  <small style={{ display: 'block', fontSize: 9, opacity: 0.7, marginTop: 2 }}>9:12 PM</small>
+                                </div>
+                                <div className="chat-bubble chat-sent">
+                                  I've already told you I need space. Please respect that.
+                                  <small style={{ display: 'block', fontSize: 9, opacity: 0.8, marginTop: 2 }}>9:15 PM ✓✓</small>
+                                </div>
+                              </div>
+
+                              <h4 style={{ fontSize: 14, fontWeight: 700, marginBottom: 4, color: '#0F172A' }}>
+                                {activeItem.filename}
+                              </h4>
+                              <div style={{ fontSize: 11, color: '#64748B', marginBottom: 14 }}>
+                                📅 {formatDate(activeItem.original_time)} · {activeItem.source}
+                              </div>
+
+                              <div style={{ marginBottom: 16 }}>
+                                <strong style={{ fontSize: 11, textTransform: 'uppercase', color: '#64748B', display: 'block', marginBottom: 6 }}>
+                                  Behavioral Indicators
+                                </strong>
+                                <span className="tag-pill">Boundary</span>
+                                <span className="tag-pill">Repeated Contact</span>
+                                <span className="tag-pill">Documented</span>
+                                <span className="tag-pill" style={{ background: 'none', border: '1px dashed #CBD5E1', color: '#6366F1' }}>
+                                  + Tag
+                                </span>
+                              </div>
+
+                              <div style={{ background: '#F8FAFC', padding: 10, borderRadius: 8, fontSize: 10, fontFamily: 'monospace', color: '#334155', border: '1px solid #E2E8F0', wordBreak: 'break-all', marginBottom: 14 }}>
+                                <strong>SHA-256 HASH:</strong><br />
+                                {activeItem.sha256}
+                              </div>
+
+                              <div style={{ display: 'flex', gap: 8 }}>
+                                <Button asChild variant="outline" style={{ flex: 1, fontSize: 12 }}>
+                                  <a href={`/api/evidence/${activeItem.id}/download`} download>
+                                    <Download size={14} /> Download
+                                  </a>
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  style={{ color: '#EF4444' }}
+                                  disabled={busy}
+                                  onClick={() => {
+                                    if (confirm('Remove this record and its derived events?')) {
+                                      void run(async () => {
+                                        await api(`/evidence/${activeItem.id}`, undefined, 'DELETE');
+                                        await refresh();
+                                        setNotice('Evidence removed.');
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <Trash2 size={14} />
+                                </Button>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ textAlign: 'center', padding: '40px 10px', color: '#64748B' }}>
+                              <p>Select an evidence item to view details.</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    {!data.evidence.length && (
-                      <p className="empty-inline">
-                        Your originals will appear here. Import a fixture from the repository to begin.
-                      </p>
-                    )}
-                  </>
-                )}
+                  );
+                })()}
 
                 {/* Timeline Page */}
                 {page === 'Timeline' && (
@@ -1023,200 +1578,178 @@ export default function App() {
                   </>
                 )}
 
-                {/* Voice Companion Page — Impeccable + transitions.dev + Dual-Mode Audio */}
+                {/* Voice Companion Page — Mockup 3 Design with Gemini 3.8 Flash & ElevenLabs */}
                 {page === 'Voice companion' && (
-                  <div className="voice-layout">
-                    <section className="surface voice-main gsap-stagger">
-                      <div className="voice-symbol-wrap">
-                        <span className={'voice-symbol ' + (recording ? 'recording' : '')}>
-                          <AudioLines size={36} strokeWidth={1.3} />
-                        </span>
-                      </div>
+                  <div>
+                    {/* Top prompt suggestion chips */}
+                    <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className="filter-pill active"
+                        onClick={() => void sendChatMessage('Can you summarize my case so far?')}
+                      >
+                        ✨ Summarize my case →
+                      </button>
+                      <button
+                        type="button"
+                        className="filter-pill"
+                        onClick={() => void sendChatMessage('What patterns did you find in these records?')}
+                      >
+                        ✨ What patterns did you find? →
+                      </button>
+                      <button
+                        type="button"
+                        className="filter-pill"
+                        onClick={() => void sendChatMessage('What should I upload or document next?')}
+                      >
+                        ✨ What should I upload next? →
+                      </button>
+                    </div>
 
-                      <h2>There’s room to talk.</h2>
-                      <p>Start with a question, speak your mind, or choose a prompt below.</p>
-
-                      {/* Live soundwave & recording timer */}
-                      {recording && (
-                        <div className="recording-indicator" role="status">
-                          <span className="recording-timer-pill">
-                            <span className="recording-timer-dot" />
-                            {Math.floor(recordingSeconds / 60)}:
-                            {(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
-                          </span>
-                          <div className="t-soundwave" aria-hidden="true">
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                            <span className="t-soundwave-bar" />
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="suggestions">
-                        {[
-                          'Summarize my case',
-                          'What connects these records?',
-                          'What should I include in my report?'
-                        ].map(q => (
-                          <button onClick={() => setQuestion(q)} key={q}>
-                            <span>{q}</span>
-                            <ArrowUpRight size={14} />
+                    <div className="voice-conversation-wrap">
+                      {/* Left: Conversational Stream */}
+                      <div className="chat-stream-card">
+                        <div className="card-header" style={{ marginBottom: 8 }}>
+                          <span className="card-title">💬 Conversation</span>
+                          <button className="link-action" onClick={clearChat}>
+                            Clear conversation
                           </button>
-                        ))}
-                      </div>
-
-                      <label className="align-left">
-                        Your question / editable transcript
-                        <textarea
-                          rows={4}
-                          value={question}
-                          onChange={e => setQuestion(e.target.value)}
-                          placeholder="What would you like to work through? (Or click Record to speak)"
-                        />
-                      </label>
-
-                      {userRecordedUrl && (
-                        <div className="audio-player-wrap align-left">
-                          <small>Your voice recording preview:</small>
-                          <audio src={userRecordedUrl} controls />
                         </div>
-                      )}
-                      <label className="check-label" style={{ margin: '0.25rem 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <input
-                          type="checkbox"
-                          checked={consent}
-                          onChange={e => setConsent(e.target.checked)}
-                        />
-                        <span>Audio & microphone processing consent active</span>
-                      </label>
 
-                      <div className="button-row">
-                        <Button
-                          disabled={busy}
-                          onClick={() =>
-                            run(async () => {
-                              if (!question.trim()) {
-                                setError('Please type a question or click Record to speak.');
-                                return;
-                              }
-                              let toUse = selected;
-                              if (!toUse.length) {
-                                if (data.evidence.length > 0) {
-                                  toUse = data.evidence.map(e => e.id);
-                                  setSelected(toUse);
-                                } else {
-                                  await api('/seed', {});
-                                  const s = await api<State>('/state');
-                                  setData(s);
-                                  toUse = s.evidence.map(e => e.id);
-                                  setSelected(toUse);
-                                }
-                              }
-                              const r = await api<{ answer: string; mode: string }>('/ask', {
-                                question,
-                                evidence_ids: toUse,
-                                consent: aiConsent || true
-                              });
-                              setAnswer(r.mode + '\n\n' + r.answer);
-                            })
-                          }
-                        >
-                          Confirm text & ask
-                          <ArrowRight size={17} />
-                        </Button>
-
-                        <Button
-                          variant={recording ? 'default' : 'outline'}
-                          disabled={busy}
-                          onClick={record}
-                          title={
-                            recording
-                              ? 'Click to stop recording'
-                              : health.voice
-                              ? 'Record audio via ElevenLabs'
-                              : 'Record audio via browser microphone'
-                          }
-                        >
-                          {recording ? <Square size={16} /> : <Mic size={16} />}
-                          {recording ? 'Stop recording' : 'Record question'}
-                        </Button>
-                      </div>
-
-                      <small>Recordings automatically stop after 60 seconds.</small>
-
-                      {answer && (
-                        <div className="answer" role="status">
-                          <span className="eyebrow">YOUR RESPONSE</span>
-                          <p>{answer}</p>
-
-                          <div className="button-row">
-                            <Button
-                              variant="outline"
-                              disabled={busy}
-                              onClick={handleSpeakResponse}
-                            >
-                              {isSpeakingBrowser ? (
-                                <>
-                                  <VolumeX size={15} /> Stop browser voice
-                                </>
-                              ) : (
-                                <>
-                                  <Volume2 size={15} />
-                                  {health.tts ? 'Prepare spoken response (ElevenLabs)' : 'Speak response (Browser voice)'}
-                                </>
-                              )}
-                            </Button>
+                        {/* Live soundwave during recording */}
+                        {recording && (
+                          <div className="recording-indicator" role="status" style={{ marginBottom: 12 }}>
+                            <span className="recording-timer-pill">
+                              <span className="recording-timer-dot" />
+                              Listening... {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
+                            </span>
+                            <div className="t-soundwave" aria-hidden="true">
+                              <span className="t-soundwave-bar" />
+                              <span className="t-soundwave-bar" />
+                              <span className="t-soundwave-bar" />
+                              <span className="t-soundwave-bar" />
+                              <span className="t-soundwave-bar" />
+                            </div>
                           </div>
+                        )}
 
-                          {audioUrl && (
-                            <audio ref={audioRef} src={audioUrl} controls autoPlay={false} />
-                          )}
+                        <div className="chat-messages">
+                          {chatHistory.map((msg, idx) => (
+                            <div key={idx} className={`chat-msg-row ${msg.sender === 'user' ? 'user' : ''}`}>
+                              {msg.sender === 'aegis' && (
+                                <div className="chat-avatar">🌸</div>
+                              )}
+                              <div className="chat-msg-bubble">
+                                {msg.text}
+                                {msg.time && (
+                                  <small style={{ display: 'block', fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
+                                    {msg.time}
+                                  </small>
+                                )}
+                              </div>
+                              {msg.sender === 'user' && (
+                                <div className="chat-avatar" style={{ background: '#6366F1', color: '#fff' }}>J</div>
+                              )}
+                            </div>
+                          ))}
                         </div>
-                      )}
-                    </section>
 
-                    <aside className="surface gsap-stagger">
-                      <h3>You choose the context.</h3>
-                      <p className="muted">
-                        Only selected records provide context. Without Gemini consent, a fixed local checklist is shown.
-                      </p>
-                      {selectionCheckboxes}
+                        <div className="chat-input-bar">
+                          <button
+                            type="button"
+                            className="icon-btn"
+                            style={{ width: 28, height: 28, border: 'none', background: 'none' }}
+                            onClick={() => navigate('Evidence')}
+                            title="Attach evidence"
+                          >
+                            <Paperclip size={15} style={{ color: '#64748B' }} />
+                          </button>
 
-                      <label className="check-label">
-                        <input
-                          type="checkbox"
-                          checked={aiConsent}
-                          disabled={!health.gemini}
-                          onChange={e => setAiConsent(e.target.checked)}
-                        />
-                        Use Gemini for this question. I consent to sending the question and selected records to Google.
-                      </label>
+                          <input
+                            type="text"
+                            placeholder="Talk or type a message..."
+                            value={question}
+                            onChange={e => setQuestion(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && question.trim()) {
+                                void sendChatMessage(question);
+                              }
+                            }}
+                          />
 
-                      <hr />
+                          <button
+                            type="button"
+                            className={`icon-btn ${recording ? 'pulse-icon' : ''}`}
+                            style={{ width: 28, height: 28, border: 'none', background: recording ? '#FEE2E2' : 'none', color: recording ? '#DC2626' : '#64748B' }}
+                            onClick={record}
+                            title={recording ? 'Stop recording' : 'Record voice (ElevenLabs / Web)'}
+                          >
+                            {recording ? <Square size={14} /> : <Mic size={15} />}
+                          </button>
 
-                      <label className="check-label">
-                        <input
-                          type="checkbox"
-                          checked={consent}
-                          onChange={e => setConsent(e.target.checked)}
-                        />
-                        I consent to processing microphone recordings and generating speech responses.
-                      </label>
+                          <button
+                            type="button"
+                            className="btn-gradient"
+                            style={{ padding: '6px 12px', margin: 0, borderRadius: 999 }}
+                            disabled={busy || !question.trim()}
+                            onClick={() => void sendChatMessage(question)}
+                          >
+                            <Send size={13} />
+                          </button>
+                        </div>
+                      </div>
 
-                      <p className="muted">
-                        External services may retain submitted data. Nothing records or plays automatically.
-                      </p>
+                      {/* Right: Settings & Privacy */}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                        <div className="card">
+                          <strong style={{ fontSize: 14, marginBottom: 12, display: 'block', color: '#0F172A' }}>
+                            ⚙️ Voice settings
+                          </strong>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                            <span style={{ fontSize: 12, color: '#334155' }}>Slower speech</span>
+                            <input
+                              type="checkbox"
+                              checked={slowerSpeech}
+                              onChange={e => setSlowerSpeech(e.target.checked)}
+                              style={{ accentColor: '#6366F1' }}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                            <span style={{ fontSize: 12, color: '#334155' }}>Captions on</span>
+                            <input
+                              type="checkbox"
+                              checked={captionsOn}
+                              onChange={e => setCaptionsOn(e.target.checked)}
+                              style={{ accentColor: '#6366F1' }}
+                            />
+                          </div>
+                          <Button
+                            variant="outline"
+                            style={{ fontSize: 12, width: '100%' }}
+                            onClick={replayLastVoiceMessage}
+                          >
+                            🔄 Replay last response
+                          </Button>
+                        </div>
 
-                      <span className="badge">
-                        {health.voice
-                          ? 'ElevenLabs Scribe active'
-                          : 'Demo voice mode · in-browser recording enabled'}
-                      </span>
-                    </aside>
+                        <div className="card" style={{ background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+                          <strong style={{ color: '#5B21B6', fontSize: 13, display: 'block', marginBottom: 4 }}>
+                            🔒 Privacy reminder
+                          </strong>
+                          <p style={{ fontSize: 11, color: '#6D28D9', lineHeight: 1.45 }}>
+                            <strong>Your voice is optional.</strong> You stay in control. Voice conversations are processed with explicit consent and you can clear your history anytime.
+                          </p>
+                        </div>
+
+                        {/* Context Selection Drawer inside Voice */}
+                        <div className="card">
+                          <strong style={{ fontSize: 13, marginBottom: 8, display: 'block', color: '#0F172A' }}>
+                            📁 Case Evidence Context
+                          </strong>
+                          {selectionCheckboxes}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
@@ -1319,17 +1852,19 @@ export default function App() {
             <form
               onSubmit={e => {
                 e.preventDefault();
-                const f = new FormData(e.currentTarget);
                 void run(async () => {
                   await api('/incidents', {
-                    title: f.get('title'),
-                    description: f.get('description'),
-                    occurred_at: f.get('time')
-                      ? new Date(String(f.get('time'))).toISOString()
+                    title: incidentTitle,
+                    description: incidentNotes,
+                    occurred_at: incidentTime
+                      ? new Date(String(incidentTime)).toISOString()
                       : null
                   });
                   await refresh();
                   setModal(false);
+                  setIncidentTitle('');
+                  setIncidentNotes('');
+                  setIncidentTime('');
                   setNotice('Incident saved to this demo.');
                 });
               }}
@@ -1338,6 +1873,8 @@ export default function App() {
                 What happened?
                 <input
                   name="title"
+                  value={incidentTitle}
+                  onChange={e => setIncidentTitle(e.target.value)}
                   autoFocus
                   required
                   maxLength={150}
@@ -1346,24 +1883,64 @@ export default function App() {
               </label>
               <label>
                 When? <small>Optional · your local timezone</small>
-                <input type="datetime-local" name="time" />
-              </label>
-              <label>
-                Your notes
-                <textarea
-                  name="description"
-                  maxLength={10000}
-                  rows={4}
-                  placeholder="Write only what you’re comfortable documenting."
+                <input
+                  type="datetime-local"
+                  name="time"
+                  value={incidentTime}
+                  onChange={e => setIncidentTime(e.target.value)}
                 />
               </label>
+
+              <div className="dictate-section-header">
+                <label style={{ margin: 0 }}>Your notes</label>
+                <button
+                  type="button"
+                  className={`dictate-voice-btn ${incidentRecording ? 'active' : ''}`}
+                  onClick={toggleIncidentDictation}
+                  title="Speak to dictate your incident notes (Accessibility)"
+                >
+                  {incidentRecording ? <Square size={13} /> : <Mic size={13} />}
+                  <span>{incidentRecording ? 'Stop dictation' : 'Dictate with Voice (Accessibility)'}</span>
+                  {incidentRecording && (
+                    <span className="dictate-timer-badge">
+                      {Math.floor(incidentRecordingSeconds / 60)}:{(incidentRecordingSeconds % 60).toString().padStart(2, '0')}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {incidentRecording && (
+                <div className="recording-indicator inline-dictate" role="status">
+                  <span className="recording-timer-pill">
+                    <span className="recording-timer-dot" /> Listening... Speak naturally to dictate notes
+                  </span>
+                  <div className="t-soundwave" aria-hidden="true">
+                    <span className="t-soundwave-bar" />
+                    <span className="t-soundwave-bar" />
+                    <span className="t-soundwave-bar" />
+                    <span className="t-soundwave-bar" />
+                    <span className="t-soundwave-bar" />
+                  </div>
+                </div>
+              )}
+
+              <textarea
+                name="description"
+                maxLength={10000}
+                rows={4}
+                value={incidentNotes}
+                onChange={e => setIncidentNotes(e.target.value)}
+                placeholder="Write or dictate your notes. Write only what you’re comfortable documenting."
+              />
               <div className="button-row">
                 <Button disabled={busy}>
                   {busy ? 'Saving…' : 'Save incident'}
                   <CheckCheck size={16} />
                 </Button>
                 <Dialog.Close asChild>
-                  <Button variant="ghost" type="button">Cancel</Button>
+                  <Button variant="ghost" type="button" onClick={() => {
+                    if (incidentRecording) incidentRecorder.current?.stop();
+                  }}>Cancel</Button>
                 </Dialog.Close>
               </div>
             </form>

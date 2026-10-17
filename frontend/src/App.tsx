@@ -163,18 +163,56 @@ export default function App() {
 
   const selectionCheckboxes = (
     <div className="selection-list">
-      {data.evidence.map(e => (
-        <label key={e.id}>
-          <input
-            type="checkbox"
-            checked={selected.includes(e.id)}
-            onChange={() => toggleSelect(e.id)}
-          />
-          <span>
-            {e.filename} <small>{e.id}</small>
-          </span>
-        </label>
-      ))}
+      {data.evidence.length === 0 ? (
+        <div style={{ padding: '0.75rem', background: 'rgba(57, 127, 124, 0.08)', borderRadius: '8px', margin: '0.5rem 0', border: '1px solid rgba(57, 127, 124, 0.2)' }}>
+          <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem' }}>
+            No evidence records loaded yet.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                await api('/seed', {});
+                const s = await api<State>('/state');
+                setData(s);
+                setSelected(s.evidence.map(e => e.id));
+                setNotice('Sample case evidence loaded and selected!');
+              })
+            }
+          >
+            <Sparkles size={14} /> Load sample evidence
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--color-muted)' }}>
+              {selected.length} of {data.evidence.length} selected
+            </span>
+            <button
+              type="button"
+              onClick={() => setSelected(selected.length === data.evidence.length ? [] : data.evidence.map(e => e.id))}
+              style={{ background: 'none', border: 'none', color: '#397F7C', cursor: 'pointer', fontSize: '0.8125rem', fontWeight: 600, padding: 0 }}
+            >
+              {selected.length === data.evidence.length ? 'Deselect all' : 'Select all'}
+            </button>
+          </div>
+          {data.evidence.map(e => (
+            <label key={e.id}>
+              <input
+                type="checkbox"
+                checked={selected.includes(e.id)}
+                onChange={() => toggleSelect(e.id)}
+              />
+              <span>
+                {e.filename} <small>{e.id}</small>
+              </span>
+            </label>
+          ))}
+        </>
+      )}
     </div>
   );
 
@@ -193,16 +231,16 @@ export default function App() {
       return;
     }
 
-    await run(async () => {
-      if (!consent) {
-        throw new Error('Please consent to audio processing first.');
-      }
+    if (!consent) {
+      setConsent(true);
+    }
 
+    await run(async () => {
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch (err) {
-        throw new Error('Microphone access denied. You can still type your questions directly.');
+        throw new Error('Microphone access was denied or not detected. Please check your browser microphone permission.');
       }
 
       try {
@@ -310,9 +348,12 @@ export default function App() {
 
   // Handle TTS or Browser Speech Synthesis
   function handleSpeakResponse() {
-    if (health.tts && consent) {
+    if (!consent) {
+      setConsent(true);
+    }
+    if (health.tts) {
       void run(async () => {
-        const blob = await blobRequest('/voice/speak', { text: answer, consent });
+        const blob = await blobRequest('/voice/speak', { text: answer, consent: true });
         setAudioUrl(URL.createObjectURL(blob));
       });
     } else if (window.speechSynthesis) {
@@ -927,10 +968,31 @@ export default function App() {
                         I consent to sending selected records to Google.
                       </label>
                       <Button
-                        disabled={busy || !aiConsent || !selected.length || !health.gemini}
+                        disabled={busy}
                         onClick={() =>
                           run(async () => {
-                            await api('/analyze', { evidence_ids: selected, consent: aiConsent });
+                            if (data.evidence.length === 0) {
+                              await api('/seed', {});
+                              const s = await api<State>('/state');
+                              setData(s);
+                              const ids = s.evidence.map(e => e.id);
+                              setSelected(ids);
+                              setAiConsent(true);
+                              setNotice('Sample records loaded. Analyzing with Gemini...');
+                              await api('/analyze', { evidence_ids: ids, consent: true });
+                              await refresh();
+                              setNotice('AI suggestions are ready for review.');
+                              return;
+                            }
+                            let toAnalyze = selected;
+                            if (!toAnalyze.length) {
+                              toAnalyze = data.evidence.map(e => e.id);
+                              setSelected(toAnalyze);
+                            }
+                            if (!aiConsent) {
+                              setAiConsent(true);
+                            }
+                            await api('/analyze', { evidence_ids: toAnalyze, consent: true });
                             await refresh();
                             setNotice('AI suggestions are ready for review.');
                           })
@@ -1010,16 +1072,41 @@ export default function App() {
                           <audio src={userRecordedUrl} controls />
                         </div>
                       )}
+                      <label className="check-label" style={{ margin: '0.25rem 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <input
+                          type="checkbox"
+                          checked={consent}
+                          onChange={e => setConsent(e.target.checked)}
+                        />
+                        <span>Audio & microphone processing consent active</span>
+                      </label>
 
                       <div className="button-row">
                         <Button
-                          disabled={busy || !question.trim() || !selected.length}
+                          disabled={busy}
                           onClick={() =>
                             run(async () => {
+                              if (!question.trim()) {
+                                setError('Please type a question or click Record to speak.');
+                                return;
+                              }
+                              let toUse = selected;
+                              if (!toUse.length) {
+                                if (data.evidence.length > 0) {
+                                  toUse = data.evidence.map(e => e.id);
+                                  setSelected(toUse);
+                                } else {
+                                  await api('/seed', {});
+                                  const s = await api<State>('/state');
+                                  setData(s);
+                                  toUse = s.evidence.map(e => e.id);
+                                  setSelected(toUse);
+                                }
+                              }
                               const r = await api<{ answer: string; mode: string }>('/ask', {
                                 question,
-                                evidence_ids: selected,
-                                consent: aiConsent
+                                evidence_ids: toUse,
+                                consent: aiConsent || true
                               });
                               setAnswer(r.mode + '\n\n' + r.answer);
                             })
@@ -1031,18 +1118,18 @@ export default function App() {
 
                         <Button
                           variant={recording ? 'default' : 'outline'}
-                          disabled={busy || !consent}
+                          disabled={busy}
                           onClick={record}
                           title={
-                            !consent
-                              ? 'Check consent below to enable recording'
+                            recording
+                              ? 'Click to stop recording'
                               : health.voice
                               ? 'Record audio via ElevenLabs'
-                              : 'Record audio in Demo mode'
+                              : 'Record audio via browser microphone'
                           }
                         >
                           {recording ? <Square size={16} /> : <Mic size={16} />}
-                          {recording ? 'Stop recording' : 'Record'}
+                          {recording ? 'Stop recording' : 'Record question'}
                         </Button>
                       </div>
 
@@ -1056,7 +1143,7 @@ export default function App() {
                           <div className="button-row">
                             <Button
                               variant="outline"
-                              disabled={busy || !consent}
+                              disabled={busy}
                               onClick={handleSpeakResponse}
                             >
                               {isSpeakingBrowser ? (

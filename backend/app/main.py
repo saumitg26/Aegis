@@ -248,8 +248,8 @@ def validate_findings(result,rows):
 def gemini(rows):
     from google import genai
     client = genai.Client(api_key=os.environ['GEMINI_API_KEY'], http_options={'timeout': 30000})
-    models = [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]
-    for m in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
+    models = [os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')]
+    for m in ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
         if m not in models: models.append(m)
     errors = {}
     for model in models:
@@ -322,8 +322,8 @@ def ask(body:Ask):
         try:
             from google import genai
             client=genai.Client(api_key=os.environ['GEMINI_API_KEY'],http_options={'timeout':30000})
-            models = [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]
-            for m in ['gemini-2.0-flash', 'gemini-1.5-flash']:
+            models = [os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')]
+            for m in ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
                 if m not in models: models.append(m)
             last_err = None
             for model in models:

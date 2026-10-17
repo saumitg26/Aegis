@@ -249,9 +249,9 @@ def gemini(rows):
     from google import genai
     client = genai.Client(api_key=os.environ['GEMINI_API_KEY'], http_options={'timeout': 30000})
     models = [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]
-    for m in ['gemini-2.0-flash', 'gemini-1.5-flash']:
+    for m in ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro']:
         if m not in models: models.append(m)
-    last_err = None
+    errors = {}
     for model in models:
         try:
             response = client.models.generate_content(
@@ -278,9 +278,10 @@ def gemini(rows):
             ]
             return validate_findings(AIResult(findings=findings), rows)
         except Exception as e:
-            last_err = e
+            print(f"[Model {model} error]: {e}", flush=True)
+            errors[model] = str(e)
             continue
-    if last_err: raise last_err
+    if errors: raise Exception(f"All models failed: {errors}")
 @app.post('/api/analyze')
 def analyze(body:Selection):
     if not body.consent:raise HTTPException(400,'Explicit consent is required before sending evidence to Google.')

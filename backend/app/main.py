@@ -119,7 +119,7 @@ def connections(events):
     return result
 
 @app.get('/api/health')
-def health(): return dict(status='ok', synthetic_only=True, gemini=bool(os.getenv('GEMINI_API_KEY')), voice=bool(os.getenv('ELEVENLABS_API_KEY')), tts=bool(os.getenv('ELEVENLABS_API_KEY') and os.getenv('ELEVENLABS_VOICE_ID')))
+def health(): return dict(status='ok', synthetic_only=True, gemini=bool(os.getenv('GEMINI_API_KEY')), voice=bool(os.getenv('ELEVENLABS_API_KEY')), tts=bool(os.getenv('ELEVENLABS_API_KEY')))
 @app.get('/api/state')
 def state():
     with Session(engine) as s:
@@ -251,7 +251,9 @@ def analyze(body:Selection):
     with Session(engine) as s:
         rows=selected(s,body.evidence_ids)
         try: result=gemini(rows)
-        except Exception:raise HTTPException(502,'Analysis unavailable or failed evidence validation. No findings saved; try again later.')
+        except Exception as e:
+            print(f"[Aegis Gemini Analyze Error]: {e}", flush=True)
+            raise HTTPException(502, f'Analysis unavailable or failed evidence validation: {e}')
         for f in result.findings:
             id=ident('AI');s.add(Record(id=id,kind='finding',data=dict(id=id,**f.model_dump(),origin='Gemini',decision='pending')))
         s.commit();return {'ok':True}
@@ -298,7 +300,9 @@ def ask(body:Ask):
                     last_err = e
                     continue
             if last_err: raise last_err
-        except Exception:raise HTTPException(502,'The response was unavailable or failed citation validation. Try again or use the local checklist.')
+        except Exception as e:
+            print(f"[Aegis Gemini Ask Error]: {e}", flush=True)
+            raise HTTPException(502, f'The response was unavailable or failed citation validation: {e}')
 @app.post('/api/voice/transcribe')
 async def transcribe(file:UploadFile=File(...),consent:bool=Form(False)):
     if not consent:raise HTTPException(400,'Consent required')
@@ -313,20 +317,24 @@ async def transcribe(file:UploadFile=File(...),consent:bool=Form(False)):
         async with httpx.AsyncClient(timeout=45) as c:
             r=await c.post('https://api.elevenlabs.io/v1/speech-to-text',headers={'xi-api-key':key},data={'model_id':os.getenv('ELEVENLABS_STT_MODEL','scribe_v1')},files={'file':(filename,raw,content_type)});r.raise_for_status()
             return {'text':r.json()['text']}
-    except Exception:raise HTTPException(502,'Transcription unavailable. Edit or type your question instead.')
+    except Exception as e:
+        print(f"[Aegis Voice Transcribe Error]: {e}", flush=True)
+        raise HTTPException(502, f'Transcription unavailable: {e}')
 class Speech(BaseModel):
     text:str=Field(min_length=1,max_length=3000)
     consent:bool=False
 @app.post('/api/voice/speak')
 async def speak(body:Speech):
     if not body.consent:raise HTTPException(400,'Consent required')
-    key=os.getenv('ELEVENLABS_API_KEY');voice=os.getenv('ELEVENLABS_VOICE_ID')
-    if not key or not voice:raise HTTPException(503,'Voice playback is not configured.')
+    key=os.getenv('ELEVENLABS_API_KEY');voice=os.getenv('ELEVENLABS_VOICE_ID', '21m00Tcm4TlvDq8ikWAM')
+    if not key:raise HTTPException(503,'Voice playback is not configured.')
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r=await c.post(f'https://api.elevenlabs.io/v1/text-to-speech/{voice}',headers={'xi-api-key':key},json={'text':body.text,'model_id':os.getenv('ELEVENLABS_TTS_MODEL','eleven_multilingual_v2')});r.raise_for_status()
             return Response(r.content,media_type='audio/mpeg')
-    except Exception:raise HTTPException(502,'Playback service unavailable. Your text remains available.')
+    except Exception as e:
+        print(f"[Aegis Voice Speak Error]: {e}", flush=True)
+        raise HTTPException(502, f'Playback service unavailable: {e}')
 class Report(BaseModel):
     evidence_ids:list[str]=Field(max_length=100)
     redact:list[str]=Field(default_factory=list,max_length=50)

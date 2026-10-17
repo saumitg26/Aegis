@@ -191,25 +191,23 @@ export default function App() {
     mm.add('(prefers-reduced-motion: no-preference)', () => {
       gsap.fromTo(
         '.gsap-stagger',
-        { opacity: 0, y: 12 },
+        { y: 8 },
         {
-          opacity: 1,
           y: 0,
-          duration: 0.35,
-          stagger: 0.04,
+          duration: 0.3,
+          stagger: 0.03,
           ease: 'power2.out',
-          clearProps: 'opacity,transform'
+          clearProps: 'all'
         }
       );
       gsap.fromTo(
         '.hero-action',
-        { opacity: 0, scale: 0.985 },
+        { scale: 0.985 },
         {
-          opacity: 1,
           scale: 1,
-          duration: 0.4,
+          duration: 0.3,
           ease: 'power2.out',
-          clearProps: 'opacity,transform'
+          clearProps: 'all'
         }
       );
     });
@@ -1675,32 +1673,93 @@ export default function App() {
                         </div>
                         <p className="muted">{f.limitations}</p>
                         <div className="button-row">
-                          <Button
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              run(async () => {
-                                await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
-                                await refresh();
-                              })
-                            }
-                          >
-                            <Check size={16} />
-                            Accept suggestion
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            disabled={busy}
-                            onClick={() =>
-                              run(async () => {
-                                await api('/findings/' + f.id, { decision: 'rejected' }, 'PATCH');
-                                await refresh();
-                              })
-                            }
-                          >
-                            <X size={16} />
-                            Reject
-                          </Button>
+                          {f.decision === 'accepted' ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#15803d', background: '#DCFCE7', border: '1px solid #BBF7D0', padding: '6px 14px', borderRadius: '999px', fontWeight: 700, fontSize: '13px' }}>
+                                <CheckCheck size={16} /> Accepted for report
+                              </span>
+                              <Button
+                                variant="ghost"
+                                disabled={busy}
+                                onClick={() =>
+                                  run(async () => {
+                                    setData(prev => ({
+                                      ...prev,
+                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'rejected' } : item)
+                                    }));
+                                    await api('/findings/' + f.id, { decision: 'rejected' }, 'PATCH');
+                                    await refresh();
+                                    setNotice('Suggestion removed from report.');
+                                  })
+                                }
+                              >
+                                <X size={14} /> Remove / Reject
+                              </Button>
+                            </div>
+                          ) : f.decision === 'rejected' ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b91c1c', background: '#FEE2E2', border: '1px solid #FECACA', padding: '6px 14px', borderRadius: '999px', fontWeight: 600, fontSize: '13px' }}>
+                                <X size={14} /> Rejected
+                              </span>
+                              <Button
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() =>
+                                  run(async () => {
+                                    setData(prev => ({
+                                      ...prev,
+                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
+                                    }));
+                                    await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
+                                    await refresh();
+                                    setNotice('Suggestion re-accepted and added to report.');
+                                  })
+                                }
+                              >
+                                <Check size={14} /> Re-accept
+                              </Button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                              <Button
+                                variant="outline"
+                                disabled={busy}
+                                style={{ borderColor: '#7C3AED', color: '#6D28D9', fontWeight: 600, background: '#EDE9FE' }}
+                                onClick={() =>
+                                  run(async () => {
+                                    setData(prev => ({
+                                      ...prev,
+                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
+                                    }));
+                                    await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
+                                    await refresh();
+                                    setNotice('Suggestion accepted! It will now be included in your exportable report.');
+                                  })
+                                }
+                              >
+                                <Check size={16} />
+                                Accept suggestion
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                disabled={busy}
+                                onClick={() =>
+                                  run(async () => {
+                                    setData(prev => ({
+                                      ...prev,
+                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'rejected' } : item)
+                                    }));
+                                    await api('/findings/' + f.id, { decision: 'rejected' }, 'PATCH');
+                                    await refresh();
+                                    setNotice('Suggestion rejected.');
+                                  })
+                                }
+                              >
+                                <X size={16} />
+                                Reject
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       </article>
                     ))}

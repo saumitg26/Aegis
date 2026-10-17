@@ -179,7 +179,11 @@ def review(id:str,body:Review):
     with Session(engine) as s:
         r=get(s,id)
         if r.kind!='finding':raise HTTPException(404,'Finding not found')
-        r.data={**r.data,'decision':body.decision}; s.commit(); return r.data
+        r.data={**r.data,'decision':body.decision}
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(r, 'data')
+        s.commit()
+        return r.data
 @app.post('/api/seed')
 def seed():
     with Session(engine) as s:

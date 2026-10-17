@@ -757,8 +757,14 @@ button:active:not(:disabled) {
 .card,
 .surface,
 .hero-banner,
-.gsap-stagger {
-  opacity: 1;
+.gsap-stagger,
+.timeline-item,
+.finding,
+.incident,
+.stat-pill,
+.insight-item {
+  opacity: 1 !important;
+  visibility: visible !important;
 }
 
 .t-page-transition {

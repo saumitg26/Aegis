@@ -41,7 +41,7 @@ Seeding is idempotent and never overwrites an existing case. Schema tables are c
 - Accept/reject findings. Reports include only accepted suggestions with all supporting records selected.
 - Select evidence, add an editable summary, redact exact phrases throughout report text, preview the same text used by PDF generation, download locally.
 - Real server-side Gemini structured-analysis and Q&A adapters. User-selected evidence, separate Google consent, bounded input, evidence-ID validation and exact-quotation validation. Unconfigured services are explicitly unavailable.
-- ElevenLabs transcription and speech adapters, separate audio consent, editable transcript, 60-second browser recording cap, user-controlled audio playback, and a clearly labeled fixed-checklist typed fallback.
+- Local microphone capture and playback work without API keys in supported browsers. Stop, discard, and a 60-second cap are provided. Explicitly choose transcription with ElevenLabs after consent; edit the transcript before asking. ElevenLabs speech playback and the labeled fixed-checklist typed fallback remain available as configured.
 
 ## Supported imports
 
@@ -73,6 +73,7 @@ Gemini citation/quotation checks detect unknown IDs and non-matching quotation f
 
 ```sh
 npm run build
+npm test
 .venv/bin/python -m pytest backend/tests -q
 ```
 
@@ -101,3 +102,9 @@ Current deliberate simplifications:
 3. **1:30–2:00:** With a configured Gemini key, select records and consent to analysis; review the cited suggestions. Without a key, show the explicit unavailable state and the deterministic local analysis.
 4. **2:00–2:30:** With ElevenLabs configured, consent, record a short question, stop, edit transcript and confirm. Optionally consent to Gemini for the answer; explicitly prepare and play speech. Without keys, show the labeled typed-checklist fallback and state that live voice has not been verified.
 5. **2:30–3:00:** Select report records, add context, redact an exact phrase, preview, and download the PDF. Nothing is shared automatically.
+
+## Recording status
+
+`Record locally` requests browser microphone permission and captures a clip on this device. `Stop recording` releases the microphone and provides local playback. No audio is uploaded by recording or stopping. `Discard recording`, navigation away, and unmount cancel capture. Local clips are ephemeral and are not added to the evidence store.
+
+To transcribe, configure `ELEVENLABS_API_KEY`, restart the backend, reload the app, opt in to ElevenLabs processing, and choose `Transcribe with ElevenLabs`. Set `ELEVENLABS_VOICE_ID` for spoken replies, and `GEMINI_API_KEY` for AI answers. Live microphone hardware and provider round trips remain unverified; six frontend tests cover capture lifecycle using a simulated MediaRecorder, alongside eight backend tests. No key is required for the local recording UI or typed checklist.

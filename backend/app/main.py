@@ -1,4 +1,5 @@
 """Local synthetic-data demonstration. Run on loopback only; no production auth."""
+from __future__ import annotations
 import hashlib, io, json, os, re, uuid
 from datetime import datetime, timezone
 from email import policy
@@ -6,7 +7,7 @@ from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
 from itertools import combinations
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 from xml.sax.saxutils import escape
 import httpx
 from dotenv import load_dotenv
@@ -129,7 +130,7 @@ def case_update(body: CaseInput):
 class IncidentInput(BaseModel):
     title: str=Field(min_length=1,max_length=150)
     description: str=Field(default='',max_length=10000)
-    occurred_at: str|None=None
+    occurred_at: Optional[str] = None
 @app.post('/api/incidents')
 def add_incident(body: IncidentInput):
     if body.occurred_at and not timestamp(body.occurred_at): raise HTTPException(422,'Provide a date with a timezone offset, or leave it unknown.')
@@ -251,9 +252,12 @@ async def transcribe(file:UploadFile=File(...),consent:bool=Form(False)):
     if not key:raise HTTPException(503,'ElevenLabs is not configured. Use the typed alternative.')
     raw=await file.read(8*1024*1024+1)
     if len(raw)>8*1024*1024:raise HTTPException(413,'Recording must be under 8 MB.')
+    content_type = file.content_type or 'audio/webm'
+    ext = '.mp4' if 'mp4' in content_type else '.ogg' if 'ogg' in content_type else '.wav' if 'wav' in content_type else '.webm'
+    filename = f'recording{ext}'
     try:
         async with httpx.AsyncClient(timeout=45) as c:
-            r=await c.post('https://api.elevenlabs.io/v1/speech-to-text',headers={'xi-api-key':key},data={'model_id':os.getenv('ELEVENLABS_STT_MODEL','scribe_v1')},files={'file':('recording.webm',raw,file.content_type or 'audio/webm')});r.raise_for_status()
+            r=await c.post('https://api.elevenlabs.io/v1/speech-to-text',headers={'xi-api-key':key},data={'model_id':os.getenv('ELEVENLABS_STT_MODEL','scribe_v1')},files={'file':(filename,raw,content_type)});r.raise_for_status()
             return {'text':r.json()['text']}
     except Exception:raise HTTPException(502,'Transcription unavailable. Edit or type your question instead.')
 class Speech(BaseModel):

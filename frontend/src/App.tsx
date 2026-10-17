@@ -353,8 +353,21 @@ export default function App() {
     }
     if (health.tts) {
       void run(async () => {
-        const blob = await blobRequest('/voice/speak', { text: answer, consent: true });
-        setAudioUrl(URL.createObjectURL(blob));
+        try {
+          const blob = await blobRequest('/voice/speak', { text: answer, consent: true });
+          setAudioUrl(URL.createObjectURL(blob));
+        } catch {
+          if (window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+            const cleanText = answer.replace(/^.*?\n\n/, '');
+            const utter = new SpeechSynthesisUtterance(cleanText);
+            utter.onend = () => setIsSpeakingBrowser(false);
+            utter.onerror = () => setIsSpeakingBrowser(false);
+            setIsSpeakingBrowser(true);
+            window.speechSynthesis.speak(utter);
+            setNotice('Playing response via local speech synthesis.');
+          }
+        }
       });
     } else if (window.speechSynthesis) {
       if (isSpeakingBrowser) {

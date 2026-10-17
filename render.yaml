@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: aegis
+    runtime: docker
+    plan: free
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite:///./backend/data/aegis.db
+      - key: ARTIFACT_DIR
+        value: ./backend/data/artifacts

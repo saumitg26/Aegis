@@ -762,22 +762,26 @@ button:active:not(:disabled) {
 .finding,
 .incident,
 .stat-pill,
-.insight-item {
+.insight-item,
+.content,
+.evidence-item-compact,
+.connections-diagram-wrap,
+.voice-interactive-box,
+.report-card-content {
   opacity: 1 !important;
   visibility: visible !important;
+  filter: none !important;
 }
 
 .t-page-transition {
-  animation: t-page-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: t-page-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 @keyframes t-page-enter {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(4px);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
@@ -2474,11 +2478,27 @@ blockquote small {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(8px);
+  background: #ffffff;
   padding: 12px 16px;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(224, 231, 255, 0.8);
+  border: 1px solid rgba(224, 231, 255, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+.btn-accept-pill {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6D28D9;
+  background: #EDE9FE;
+  border: 1px solid #DDD6FE;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.btn-accept-pill:hover {
+  background: #DDD6FE;
+  color: #5B21B6;
 }
 .journey-step-item {
   display: flex;

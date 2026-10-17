@@ -140,3 +140,39 @@ def test_sso_authentication(env):
     assert res_logout.status_code == 200
     assert res_logout.json()['ok'] is True
 
+def test_fallback_ai_analysis_and_accept_suggestion(env, monkeypatch):
+    c, m = env
+    c.post('/api/seed')
+    state = c.get('/api/state').json()
+    # Check that companion findings are seeded
+    companion = [f for f in state['findings'] if f.get('origin') in ('AI Companion', 'Gemini')]
+    assert len(companion) >= 3
+    finding_id = companion[0]['id']
+
+    # Accept suggestion and check that it persists in state
+    res_patch = c.patch(f'/api/findings/{finding_id}', json={'decision': 'accepted'})
+    assert res_patch.status_code == 200
+    assert res_patch.json()['decision'] == 'accepted'
+
+    state_after = c.get('/api/state').json()
+    accepted_f = next(f for f in state_after['findings'] if f['id'] == finding_id)
+    assert accepted_f['decision'] == 'accepted'
+
+    # Test analyze fallback when Gemini raises 503
+    monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+    from google import genai
+    from types import SimpleNamespace
+    def failing_generate(**kwargs):
+        raise Exception("503 UNAVAILABLE. High demand spike")
+    monkeypatch.setattr(genai, 'Client', lambda **kwargs: SimpleNamespace(models=SimpleNamespace(generate_content=failing_generate)))
+
+    aid = state['evidence'][0]['id']
+    res_an = c.post('/api/analyze', json={'evidence_ids': [aid], 'consent': True})
+    assert res_an.status_code == 200
+    assert res_an.json()['ok'] is True
+    latest_findings = c.get('/api/state').json()['findings']
+    fallback_f = latest_findings[-1]
+    assert fallback_f['origin'] == 'AI Companion'
+    assert fallback_f['decision'] == 'pending'
+
+

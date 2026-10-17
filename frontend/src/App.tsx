@@ -190,17 +190,6 @@ export default function App() {
     const mm = gsap.matchMedia();
     mm.add('(prefers-reduced-motion: no-preference)', () => {
       gsap.fromTo(
-        '.gsap-stagger',
-        { y: 8 },
-        {
-          y: 0,
-          duration: 0.3,
-          stagger: 0.03,
-          ease: 'power2.out',
-          clearProps: 'all'
-        }
-      );
-      gsap.fromTo(
         '.hero-action',
         { scale: 0.985 },
         {
@@ -998,27 +987,78 @@ export default function App() {
                             See all insights →
                           </button>
                         </div>
-                        <div className="insight-item" onClick={() => navigate('Insights')}>
-                          <span className="insight-num">1</span>
-                          <div className="insight-content">
-                            <strong>Pattern of repeated contact</strong>
-                            <p>There were 17 instances of contact after you requested no further communication.</p>
-                          </div>
-                        </div>
-                        <div className="insight-item" onClick={() => navigate('Insights')}>
-                          <span className="insight-num">2</span>
-                          <div className="insight-content">
-                            <strong>Escalation over time</strong>
-                            <p>The frequency and tone increased in February, with more intense and concerning messages.</p>
-                          </div>
-                        </div>
-                        <div className="insight-item" onClick={() => navigate('Insights')}>
-                          <span className="insight-num">3</span>
-                          <div className="insight-content">
-                            <strong>Multiple platforms involved</strong>
-                            <p>Activity occurred across text messages, email, and social media, suggesting a coordinated pattern.</p>
-                          </div>
-                        </div>
+                        {data.findings.length > 0 ? (
+                          data.findings.slice(0, 3).map((f, idx) => (
+                            <div
+                              key={f.id}
+                              className="insight-item"
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => {
+                                navigate('Insights');
+                                setTimeout(() => {
+                                  const el = document.getElementById(`finding-${f.id}`);
+                                  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }, 150);
+                              }}
+                            >
+                              <span className="insight-num">{idx + 1}</span>
+                              <div className="insight-content" style={{ flex: 1 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
+                                  <strong>{f.title}</strong>
+                                  {f.decision === 'accepted' ? (
+                                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#DCFCE7', color: '#15803d', border: '1px solid #BBF7D0', flexShrink: 0 }}>
+                                      ✓ In Report
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      className="btn-accept-pill"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        run(async () => {
+                                          setData(prev => ({
+                                            ...prev,
+                                            findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
+                                          }));
+                                          await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
+                                          await refresh();
+                                          setNotice('Suggestion accepted! It will now be included in your exportable report.');
+                                        });
+                                      }}
+                                    >
+                                      Accept suggestion →
+                                    </button>
+                                  )}
+                                </div>
+                                <p>{f.summary}</p>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <>
+                            <div className="insight-item" onClick={() => navigate('Insights')}>
+                              <span className="insight-num">1</span>
+                              <div className="insight-content">
+                                <strong>Pattern of repeated contact</strong>
+                                <p>There were 17 instances of contact after you requested no further communication.</p>
+                              </div>
+                            </div>
+                            <div className="insight-item" onClick={() => navigate('Insights')}>
+                              <span className="insight-num">2</span>
+                              <div className="insight-content">
+                                <strong>Escalation over time</strong>
+                                <p>The frequency and tone increased in February, with more intense and concerning messages.</p>
+                              </div>
+                            </div>
+                            <div className="insight-item" onClick={() => navigate('Insights')}>
+                              <span className="insight-num">3</span>
+                              <div className="insight-content">
+                                <strong>Multiple platforms involved</strong>
+                                <p>Activity occurred across text messages, email, and social media, suggesting a coordinated pattern.</p>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       {/* Recent Evidence Card */}
@@ -1603,10 +1643,10 @@ export default function App() {
                     </div>
 
                     {data.findings.map(f => (
-                      <article className="surface finding gsap-stagger" key={f.id}>
+                      <article className="surface finding gsap-stagger" key={f.id} id={`finding-${f.id}`}>
                         <div className="section-title">
                           <span className="badge">
-                            {f.origin === 'Gemini'
+                            {f.origin === 'Gemini' || f.origin === 'AI Companion'
                               ? 'AI suggestion · needs review'
                               : 'Explainable local signal'}
                           </span>

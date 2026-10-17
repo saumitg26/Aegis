@@ -31,7 +31,16 @@ class Record(Base):
     kind: Mapped[str] = mapped_column(String, index=True)
     data: Mapped[dict] = mapped_column(JSON)
 Base.metadata.create_all(engine)
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title='AEGIS synthetic demo', version='0.1.0')
+origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://127.0.0.1:5173,http://localhost:5173,*').split(',') if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins if '*' not in origins else ['*'],
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
 def now(): return datetime.now(timezone.utc).isoformat()
 def ident(prefix): return prefix + '-' + uuid.uuid4().hex[:12].upper()
 def all_records(s, kind): return [r.data for r in s.scalars(select(Record).where(Record.kind == kind))]
@@ -308,3 +317,17 @@ def report(body:Report):
     buffer=io.BytesIO();styles=getSampleStyleSheet()
     SimpleDocTemplate(buffer,title='AEGIS incident summary').build([x for line in text.split('\n\n') for x in (Paragraph(escape(line).replace('\n','<br/>'),styles['BodyText']),Spacer(1,12))])
     return Response(buffer.getvalue(),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="aegis-report.pdf"'})
+
+DIST_DIR = Path(__file__).resolve().parents[2] / 'dist'
+if DIST_DIR.exists():
+    from fastapi.staticfiles import StaticFiles
+    if (DIST_DIR / 'assets').exists():
+        app.mount('/assets', StaticFiles(directory=str(DIST_DIR / 'assets')), name='assets')
+    @app.get('/{full_path:path}')
+    async def serve_spa(full_path: str):
+        if full_path.startswith('api/'):
+            raise HTTPException(404, 'API endpoint not found')
+        target = DIST_DIR / full_path
+        if target.is_file():
+            return FileResponse(target)
+        return FileResponse(DIST_DIR / 'index.html')

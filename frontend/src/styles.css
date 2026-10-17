@@ -754,6 +754,13 @@ button:active:not(:disabled) {
 }
 
 /* transitions.dev Page Transitions */
+.card,
+.surface,
+.hero-banner,
+.gsap-stagger {
+  opacity: 1;
+}
+
 .t-page-transition {
   animation: t-page-enter 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
 }

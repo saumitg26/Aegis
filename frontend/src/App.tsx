@@ -189,22 +189,32 @@ export default function App() {
   useGSAP(() => {
     const mm = gsap.matchMedia();
     mm.add('(prefers-reduced-motion: no-preference)', () => {
-      gsap.from('.gsap-stagger', {
-        opacity: 0,
-        y: 12,
-        duration: 0.35,
-        stagger: 0.04,
-        ease: 'power2.out'
-      });
-      gsap.from('.hero-action', {
-        opacity: 0,
-        scale: 0.985,
-        duration: 0.4,
-        ease: 'power2.out'
-      });
+      gsap.fromTo(
+        '.gsap-stagger',
+        { opacity: 0, y: 12 },
+        {
+          opacity: 1,
+          y: 0,
+          duration: 0.35,
+          stagger: 0.04,
+          ease: 'power2.out',
+          clearProps: 'opacity,transform'
+        }
+      );
+      gsap.fromTo(
+        '.hero-action',
+        { opacity: 0, scale: 0.985 },
+        {
+          opacity: 1,
+          scale: 1,
+          duration: 0.4,
+          ease: 'power2.out',
+          clearProps: 'opacity,transform'
+        }
+      );
     });
     return () => mm.revert();
-  }, { scope: containerRef, dependencies: [page, data] });
+  }, { scope: containerRef, dependencies: [page] });
 
   function navigate(name: string) {
     if (recorder.current?.state === 'recording') {

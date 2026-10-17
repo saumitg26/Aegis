@@ -823,6 +823,47 @@ export default function App() {
                         </div>
                         <h3>{f.title}</h3>
                         <p>{f.summary}</p>
+
+                        {(f.direct_observations?.length || f.possible_interpretations?.length || (f.quotations && Object.keys(f.quotations).length > 0)) ? (
+                          <div className="structured-finding">
+                            {f.direct_observations && f.direct_observations.length > 0 && (
+                              <div className="finding-section">
+                                <strong>Direct Observations (Facts):</strong>
+                                <ul>
+                                  {f.direct_observations.map((obs, i) => (
+                                    <li key={i}>{obs}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {f.possible_interpretations && f.possible_interpretations.length > 0 && (
+                              <div className="finding-section">
+                                <strong>Possible Interpretations (Inferences):</strong>
+                                <ul>
+                                  {f.possible_interpretations.map((interp, i) => (
+                                    <li key={i}>{interp}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {f.quotations && Object.keys(f.quotations).length > 0 && (
+                              <div className="finding-section">
+                                <strong>Verified Direct Quotations:</strong>
+                                <div className="quotations-list">
+                                  {Object.entries(f.quotations).map(([evId, quote]) => (
+                                    <div key={evId} className="quotation-item">
+                                      “{quote}”
+                                      <small>Source: {evId}</small>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+
                         <div className="citations">
                           {f.evidence_ids.map(id => (
                             <button

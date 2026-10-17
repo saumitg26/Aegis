@@ -1,0 +1,9 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+sqlalchemy>=2,<3
+python-multipart>=0.0.20
+reportlab>=4,<5
+google-genai>=1.30,<2
+httpx>=0.28,<1
+python-dotenv>=1,<2
+pytest>=8,<10

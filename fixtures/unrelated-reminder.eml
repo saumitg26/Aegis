@@ -1,0 +1,7 @@
+From: calendar@example.invalid
+To: demo-recipient@example.invalid
+Date: Thu, 15 Oct 2026 14:37:00 +0000
+Subject: Unrelated community calendar reminder
+Content-Type: text/plain; charset=utf-8
+
+Reminder: the community study session begins tomorrow. This unrelated reminder is intentionally close in time to demonstrate a false positive.

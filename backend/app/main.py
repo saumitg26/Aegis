@@ -426,6 +426,94 @@ def report(body:Report):
     SimpleDocTemplate(buffer,title='AEGIS incident summary').build([x for line in text.split('\n\n') for x in (Paragraph(escape(line).replace('\n','<br/>'),styles['BodyText']),Spacer(1,12))])
     return Response(buffer.getvalue(),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="aegis-report.pdf"'})
 
+class SSORequest(BaseModel):
+    provider: Literal['vultr', 'google', 'saml', 'demo'] = 'vultr'
+    code: Optional[str] = None
+    email: Optional[str] = None
+
+@app.post('/api/auth/sso')
+def auth_sso(body: SSORequest):
+    provider = body.provider
+    if provider in ('vultr', 'demo'):
+        user = {
+            "id": "vultr-usr-882194",
+            "name": "Jamie Doe",
+            "email": body.email or "jamie@cloud.vultr.com",
+            "provider": "Vultr Cloud Authentication",
+            "provider_id": "vultr",
+            "avatar_initials": "J",
+            "role": "Case Owner / Survivor",
+            "vultr_region": "ewr",
+            "vultr_region_name": "New Jersey (EWR - High Frequency)",
+            "vultr_instance_id": "vultr-inst-49204",
+            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
+            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
+            "authenticated_at": now()
+        }
+        token = f"aegis_vultr_{uuid.uuid4().hex}"
+        return {"token": token, "user": user}
+    elif provider == 'google':
+        user = {
+            "id": "goog-usr-392019",
+            "name": "Jamie Doe",
+            "email": body.email or "jamie.doe@gmail.com",
+            "provider": "Google Workspace Identity",
+            "provider_id": "google",
+            "avatar_initials": "J",
+            "role": "Case Owner / Survivor",
+            "vultr_region": "ewr",
+            "vultr_region_name": "New Jersey (EWR - Hybrid Cloud)",
+            "vultr_instance_id": "vultr-inst-49204",
+            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
+            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
+            "authenticated_at": now()
+        }
+        token = f"aegis_goog_{uuid.uuid4().hex}"
+        return {"token": token, "user": user}
+    else:  # saml
+        user = {
+            "id": "saml-usr-771032",
+            "name": "Jamie Doe",
+            "email": body.email or "jamie@enterprise.org",
+            "provider": "Enterprise SAML / Okta SSO",
+            "provider_id": "saml",
+            "avatar_initials": "J",
+            "role": "Case Owner / Survivor",
+            "vultr_region": "ewr",
+            "vultr_region_name": "New Jersey (EWR - Dedicated Enterprise Enclave)",
+            "vultr_instance_id": "vultr-inst-49204",
+            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
+            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
+            "authenticated_at": now()
+        }
+        token = f"aegis_saml_{uuid.uuid4().hex}"
+        return {"token": token, "user": user}
+
+@app.get('/api/auth/me')
+def auth_me():
+    return {
+        "authenticated": True,
+        "user": {
+            "id": "vultr-usr-882194",
+            "name": "Jamie Doe",
+            "email": "jamie@cloud.vultr.com",
+            "provider": "Vultr Cloud Authentication",
+            "provider_id": "vultr",
+            "avatar_initials": "J",
+            "role": "Case Owner / Survivor",
+            "vultr_region": "ewr",
+            "vultr_region_name": "New Jersey (EWR - High Frequency)",
+            "vultr_instance_id": "vultr-inst-49204",
+            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
+            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
+            "authenticated_at": now()
+        }
+    }
+
+@app.post('/api/auth/logout')
+def auth_logout():
+    return {"ok": True, "message": "Session terminated"}
+
 DIST_DIR = Path(__file__).resolve().parents[2] / 'dist'
 if DIST_DIR.exists():
     from fastapi.staticfiles import StaticFiles

@@ -113,3 +113,30 @@ def test_voice_adapter_with_mock(env,monkeypatch):
     assert r.json()['text']=='Synthetic transcript'
     assert c.post('/api/voice/speak',json={'text':'Approved response','consent':True}).content==b'audio-test-bytes'
     assert len(calls)==2
+
+def test_sso_authentication(env):
+    c, m = env
+    # Test Vultr SSO
+    res = c.post('/api/auth/sso', json={'provider': 'vultr'})
+    assert res.status_code == 200
+    data = res.json()
+    assert 'token' in data
+    assert data['user']['email'] == 'jamie@cloud.vultr.com'
+    assert data['user']['vultr_region'] == 'ewr'
+    assert 'Vultr' in data['user']['provider']
+
+    # Test Google SSO
+    res_goog = c.post('/api/auth/sso', json={'provider': 'google'})
+    assert res_goog.status_code == 200
+    assert 'Google' in res_goog.json()['user']['provider']
+
+    # Test /api/auth/me
+    res_me = c.get('/api/auth/me')
+    assert res_me.status_code == 200
+    assert res_me.json()['authenticated'] is True
+
+    # Test logout
+    res_logout = c.post('/api/auth/logout')
+    assert res_logout.status_code == 200
+    assert res_logout.json()['ok'] is True
+

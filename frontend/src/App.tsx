@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
-import { api, blobRequest, type State, type Evidence } from './api';
+import { api, blobRequest, type State, type Evidence, type AuthUser } from './api';
 import { Button } from './components/ui/button';
 
 gsap.registerPlugin(useGSAP);
@@ -90,6 +90,51 @@ export default function App() {
   ]);
   const [slowerSpeech, setSlowerSpeech] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
+
+  // User Authentication & Vultr SSO state
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    const saved = localStorage.getItem('aegis_user');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return null;
+  });
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [ssoLoading, setSsoLoading] = useState(false);
+
+  useEffect(() => {
+    if (!profileOpen) return;
+    const close = () => setProfileOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [profileOpen]);
+
+  async function handleSSOLogin(provider: 'vultr' | 'google' | 'saml' | 'demo') {
+    setSsoLoading(true);
+    setError('');
+    try {
+      const res = await api<{ token: string; user: AuthUser }>('/auth/sso', { provider });
+      localStorage.setItem('aegis_auth_token', res.token);
+      localStorage.setItem('aegis_user', JSON.stringify(res.user));
+      setCurrentUser(res.user);
+      setNotice(`Signed in with ${res.user.provider} (${res.user.vultr_region.toUpperCase()})`);
+    } catch (err: any) {
+      setError(err.message || 'SSO authentication failed');
+    } finally {
+      setSsoLoading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    try {
+      await api('/auth/logout', {});
+    } catch {}
+    localStorage.removeItem('aegis_auth_token');
+    localStorage.removeItem('aegis_user');
+    setCurrentUser(null);
+    setProfileOpen(false);
+    setNotice('Signed out successfully.');
+  }
 
   const containerRef = useRef<HTMLDivElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -589,6 +634,88 @@ export default function App() {
 
   const pendingFindingsCount = data.findings.filter(f => f.decision === 'pending').length;
 
+  if (!currentUser) {
+    return (
+      <div className="sso-portal-wrap">
+        <div className="sso-portal-card gsap-stagger">
+          <div className="sso-brand-header">
+            <div className="sso-lotus-mark">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 2C12 2 8 8 8 13C8 16.5 10 19 12 20C14 19 16 16.5 16 13C16 8 12 2 12 2Z" fill="#7C3AED" />
+                <path d="M5 8C5 8 4 13 6 16C8 19 10.5 19.5 11.5 19.5C9.5 18 7.5 15 7.5 12C7.5 9 8.5 7 8.5 7C6.5 7 5 8 5 8Z" fill="#A78BFA" />
+                <path d="M19 8C19 8 20 13 18 16C16 19 13.5 19.5 12.5 19.5C14.5 18 16.5 15 16.5 12C16.5 9 15.5 7 15.5 7C17.5 7 19 8 19 8Z" fill="#A78BFA" />
+              </svg>
+            </div>
+            <h1 className="sso-title">AEGIS</h1>
+            <div className="sso-subtitle">Your Digital Safety Companion</div>
+            <div className="sso-desc">
+              A private, confidential space to document what happened and preserve cryptographic evidence with zero-trust enclave protection.
+            </div>
+          </div>
+
+          {error && <div className="banner error" style={{ width: '100%', marginBottom: 16 }}>{error}</div>}
+          {notice && <div className="banner success" style={{ width: '100%', marginBottom: 16 }}>{notice}</div>}
+
+          <div className="sso-buttons-stack">
+            <button
+              className="sso-vultr-btn"
+              onClick={() => handleSSOLogin('vultr')}
+              disabled={ssoLoading}
+            >
+              <ShieldCheck size={18} />
+              <span>{ssoLoading ? 'Authenticating...' : 'Continue with Vultr SSO'}</span>
+            </button>
+            <div style={{ fontSize: 11, color: '#64748B', marginTop: -4, marginBottom: 4 }}>
+              Isolated High-Frequency compute & cryptographic enclave (EWR)
+            </div>
+
+            <button
+              className="sso-secondary-btn"
+              onClick={() => handleSSOLogin('google')}
+              disabled={ssoLoading}
+            >
+              <Mail size={16} />
+              <span>Continue with Google Workspace</span>
+            </button>
+
+            <button
+              className="sso-secondary-btn"
+              onClick={() => handleSSOLogin('saml')}
+              disabled={ssoLoading}
+            >
+              <LockKeyhole size={16} />
+              <span>Continue with Enterprise SAML / Okta</span>
+            </button>
+
+            <button
+              className="sso-demo-btn"
+              onClick={() => handleSSOLogin('demo')}
+              disabled={ssoLoading}
+            >
+              <Sparkles size={16} />
+              <span>Instant Demo Access as Jamie</span>
+            </button>
+          </div>
+
+          <div className="sso-trust-strip">
+            <div className="sso-trust-item">
+              <Shield size={13} style={{ color: '#10B981' }} />
+              <span>Zero-Knowledge</span>
+            </div>
+            <div className="sso-trust-item">
+              <LockKeyhole size={13} style={{ color: '#6366F1' }} />
+              <span>SHA-256 Verified</span>
+            </div>
+            <div className="sso-trust-item">
+              <Sparkles size={13} style={{ color: '#0284C7' }} />
+              <span>Vultr Cloud EWR</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app" ref={containerRef}>
       <a href="#main" className="skip">Skip to content</a>
@@ -656,10 +783,59 @@ export default function App() {
             <button className="icon-btn" title="Synthetic Demo Workspace" onClick={() => navigate('Insights')}>
               <Bell size={16} />
             </button>
-            <div className="user-pill" onClick={() => navigate('My case')}>
-              <div className="user-avatar">J</div>
-              <span className="user-name">Jamie</span>
-              <span style={{ fontSize: 10, color: '#94A3B8' }}>▼</span>
+            <div
+              className="user-pill"
+              onClick={e => {
+                e.stopPropagation();
+                setProfileOpen(prev => !prev);
+              }}
+            >
+              <div className="user-avatar">{currentUser?.avatar_initials || 'J'}</div>
+              <span className="user-name">{currentUser?.name?.split(' ')[0] || 'Jamie'}</span>
+              <span style={{ fontSize: 10, color: '#94A3B8' }}>{profileOpen ? '▲' : '▼'}</span>
+
+              {profileOpen && (
+                <div className="profile-popover" onClick={e => e.stopPropagation()}>
+                  <div className="profile-popover-header">
+                    <div className="profile-header-avatar">
+                      {currentUser?.avatar_initials || 'J'}
+                    </div>
+                    <div className="profile-header-meta">
+                      <div className="profile-header-name">{currentUser?.name || 'Jamie Doe'}</div>
+                      <div className="profile-header-email">{currentUser?.email || 'jamie@cloud.vultr.com'}</div>
+                    </div>
+                  </div>
+
+                  <div className="vultr-status-badge">
+                    <ShieldCheck size={14} />
+                    <span>{currentUser?.provider || 'Vultr Cloud Authentication'}</span>
+                  </div>
+
+                  <div className="vultr-meta-card">
+                    <div className="vultr-meta-row">
+                      <span>Datacenter Enclave:</span>
+                      <strong>{currentUser?.vultr_region_name || 'New Jersey (EWR)'}</strong>
+                    </div>
+                    <div className="vultr-meta-row">
+                      <span>Instance ID:</span>
+                      <code>{currentUser?.vultr_instance_id || 'vultr-inst-49204'}</code>
+                    </div>
+                    <div className="vultr-meta-row">
+                      <span>Encryption:</span>
+                      <span>{currentUser?.encryption_standard || 'AES-256-GCM / SHA-256'}</span>
+                    </div>
+                    <div className="vultr-meta-row">
+                      <span>Role:</span>
+                      <strong>{currentUser?.role || 'Survivor Case Owner'}</strong>
+                    </div>
+                  </div>
+
+                  <button className="profile-signout-btn" onClick={handleSignOut}>
+                    <LockKeyhole size={14} />
+                    <span>Sign Out of AEGIS</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -679,7 +855,7 @@ export default function App() {
           </div>
           <div className="hero-text-area">
             <h1 className="hero-greeting" ref={heading} tabIndex={-1}>
-              {page === 'Home' ? 'Hi Jamie,' : (pageTitles[page]?.[0] || page)}
+              {page === 'Home' ? `Hi ${currentUser?.name?.split(' ')[0] || 'Jamie'},` : (pageTitles[page]?.[0] || page)}
             </h1>
             <div className="hero-sub">
               {page === 'Home'

@@ -66,7 +66,7 @@ async def protect_public_demo(request: Request, call_next):
         origin = request.headers.get('origin')
         if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
             return JSONResponse({'detail':'Cross-site requests are not allowed.'}, status_code=403)
-    public_paths = ['/api/health','/api/auth/me','/api/auth/sso','/api/auth/logout','/api/demo/audio']
+    public_paths = ['/api/health','/api/auth/me','/api/auth/sso','/api/auth/logout','/api/demo/audio','/api/auth/vultr/config','/api/auth/vultr/authorize','/api/auth/vultr/callback']
     if not space and path not in public_paths:
         if request.method == 'GET' and path == '/api/state': return JSONResponse(demo_snapshot())
         return JSONResponse({'detail':'Open a demo workspace to continue. Your previous session may have expired.'}, status_code=401)

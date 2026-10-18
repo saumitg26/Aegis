@@ -26,6 +26,7 @@ class Workspace:
     calls: list = field(default_factory=list)
     active: int = 0
     revoked: bool = False
+    user: dict = None
 
     @property
     def artifacts(self): return self.directory / 'artifacts'

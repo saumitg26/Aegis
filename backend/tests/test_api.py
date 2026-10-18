@@ -117,8 +117,22 @@ def test_voice_adapter_with_mock(env,monkeypatch):
 
 def test_sso_authentication(env):
     c, m = env
-    for provider in ['vultr', 'google', 'saml']:
+    for provider in ['google', 'saml']:
         assert c.post('/api/auth/sso', json={'provider': provider}).status_code == 501
+    
+    # Test Vultr SSO authentication
+    res_vultr = c.post('/api/auth/sso', json={'provider': 'vultr'})
+    assert res_vultr.status_code == 200
+    v_data = res_vultr.json()
+    assert v_data['user']['provider_id'] == 'vultr'
+    assert 'ewr' in v_data['user']['vultr_region']
+    assert c.get('/api/auth/vultr/config').json()['configured'] is False
+    res_auth = c.get('/api/auth/vultr/authorize', follow_redirects=False)
+    assert res_auth.status_code == 307
+    assert 'vultr-sandbox' in res_auth.headers.get('location', '')
+
+    # Test logout and demo SSO
+    assert c.post('/api/auth/logout').json()['ok'] is True
     response = c.post('/api/auth/sso', json={'provider': 'demo'})
     assert response.status_code == 200 and response.json()['token'] is None
     assert c.get('/api/auth/me').json()['authenticated'] is False

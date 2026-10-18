@@ -23,6 +23,7 @@ COPY --from=frontend-builder /app/dist ./dist
 
 RUN mkdir -p backend/data/artifacts
 
+ENV PUBLIC_DEMO=true
 ENV PORT=8000
 EXPOSE 8000
 

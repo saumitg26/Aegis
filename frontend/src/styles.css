@@ -3950,3 +3950,5 @@ blockquote small {
 }
 
 
+
+.demo-safety-banner{padding:14px 28px;background:#f3f5eb;border-bottom:1px solid #d8dfcb;color:#405137;font-size:13px;line-height:1.6}.home-simple{max-width:900px}.home-simple>h1{font-size:36px}.home-simple>h2{margin:32px 0 12px}.home-simple>p{margin:14px 0 24px}.voice-capture{padding:20px;margin:18px 0;border:1px solid var(--border,#dde8e5);border-radius:14px;background:white;color:#203536}.voice-capture p,.voice-capture label{font-size:13px;line-height:1.7}.voice-capture label{display:block;margin:16px 0}.voice-capture input[type=checkbox]{margin-right:8px}.voice-capture audio{display:block;width:100%;margin:15px 0}.voice-capture a{display:block;text-decoration:underline}.voice-capture small{display:block;margin-top:14px}.voice-capture [role=alert]{color:#8c3e32}audio{max-width:100%}

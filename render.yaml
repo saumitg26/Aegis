@@ -4,6 +4,8 @@ services:
     runtime: docker
     plan: free
     envVars:
+      - key: PUBLIC_DEMO
+        value: "true"
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL

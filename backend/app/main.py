@@ -11,8 +11,8 @@ from typing import Literal, Optional
 from xml.sax.saxutils import escape
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
+from fastapi.responses import FileResponse, Response, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, String, JSON, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
@@ -33,14 +33,48 @@ class Record(Base):
 Base.metadata.create_all(engine)
 from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title='AEGIS synthetic demo', version='0.1.0')
-origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://127.0.0.1:5173,http://localhost:5173,*').split(',') if o.strip()]
+origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://127.0.0.1:5173,http://localhost:5173').split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins if '*' not in origins else ['*'],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=['*'],
     allow_headers=['*'],
 )
+def public_demo():
+    return os.getenv('PUBLIC_DEMO', 'true' if os.getenv('RENDER') else 'false').lower() == 'true'
+
+@app.middleware('http')
+async def protect_public_demo(request: Request, call_next):
+    # Public hosting exposes fixtures, never the shared local database or paid APIs.
+    if public_demo() and request.url.path.startswith('/api/'):
+        path = request.url.path
+        if request.method == 'GET' and path == '/api/state':
+            return JSONResponse(demo_snapshot())
+        allowed = request.method == 'GET' and path in ['/api/health', '/api/auth/me', '/api/demo/audio']
+        allowed = allowed or request.method == 'POST' and path in ['/api/auth/sso', '/api/auth/logout']
+        if not allowed:
+            return JSONResponse({'detail':'Public synthetic preview is read-only. Run locally to upload, record, analyze, or save. Real accounts and private storage are not implemented.'}, status_code=403)
+    return await call_next(request)
+
+def demo_snapshot():
+    artifacts, events = [], []
+    fixture_dir = Path(__file__).resolve().parents[2] / 'fixtures'
+    for index, name in enumerate(['community-email.eml','community-chat.json','unrelated-reminder.eml']):
+        raw = (fixture_dir/name).read_bytes()
+        rows, status = parse_file(name, raw)
+        aid = f'DEMO-EV-{index+1}'
+        artifacts.append(dict(id=aid,filename=name,label='',sha256=hashlib.sha256(raw).hexdigest(),size=len(raw),imported_at=None,status=status,source=rows[0]['platform'],original_time=rows[0]['time']))
+        for number, row in enumerate(rows):
+            events.append(dict(**row,id=f'{aid}-ET-{number}',evidence_id=aid,timezone_basis='UTC' if row['time'] else 'Unknown'))
+    return dict(case={'id':'demo','title':'Synthetic community case','description':'Public read-only sample. No personal records.'},evidence=artifacts,events=sorted(events,key=lambda e:e['time'] or '9999'),incidents=[],findings=connections(events))
+
+@app.get('/api/demo/audio')
+def demo_audio():
+    path=Path(__file__).resolve().parents[2]/'fixtures'/'sample-recording.wav'
+    if not path.exists(): raise HTTPException(404,'Synthetic audio fixture unavailable')
+    return FileResponse(path,media_type='audio/wav')
+
 def now(): return datetime.now(timezone.utc).isoformat()
 def ident(prefix): return prefix + '-' + uuid.uuid4().hex[:12].upper()
 def all_records(s, kind): return [r.data for r in s.scalars(select(Record).where(Record.kind == kind))]
@@ -63,7 +97,7 @@ def parse_file(name, raw):
             raise HTTPException(422, 'The file does not contain a supported image signature.')
         return [], 'Stored image · no OCR'
     if ext in ['.wav', '.mp3', '.m4a', '.ogg', '.webm']:
-        return [], 'Stored audio · Lawfully obtained recording'
+        return [], 'Stored audio · origin not verified'
     try: text = raw.decode('utf-8')
     except UnicodeDecodeError: raise HTTPException(422, 'Text imports must use UTF-8 encoding.')
     if ext == '.eml':
@@ -123,7 +157,7 @@ def connections(events):
     return result
 
 @app.get('/api/health')
-def health(): return dict(status='ok', synthetic_only=True, gemini=bool(os.getenv('GEMINI_API_KEY')), voice=bool(os.getenv('ELEVENLABS_API_KEY')), tts=bool(os.getenv('ELEVENLABS_API_KEY')))
+def health(): return dict(status='ok', synthetic_only=True, public_demo=public_demo(), gemini=not public_demo() and bool(os.getenv('GEMINI_API_KEY')), voice=not public_demo() and bool(os.getenv('ELEVENLABS_API_KEY')), tts=not public_demo() and bool(os.getenv('ELEVENLABS_API_KEY')))
 def seed_initial_findings(s):
     arts = all_records(s, 'artifact')
     if not arts:
@@ -497,7 +531,7 @@ def fallback_ai_ask(question: str, rows: list, evidence_ids: list[str]) -> Answe
             "1) Preserve full, uncropped screenshots showing the sender header, date, and timestamp. "
             "2) Keep original .eml or message export files whenever possible. "
             "3) Document any third-party contacts or voice messages using the Voice Companion. "
-            "4) Review and accept suggestions on your Insights tab to generate your court-ready PDF report."
+            "4) Review and accept suggestions on your Insights tab to generate your user-prepared incident summary."
         )
     else:
         ans = (
@@ -600,7 +634,7 @@ async def speak(body:Speech):
 async def analyze_audio(
     file: Optional[UploadFile] = File(None),
     artifact_id: Optional[str] = Form(None),
-    consent: bool = Form(True)
+    consent: bool = Form(False)
 ):
     if not consent:
         raise HTTPException(400, 'Consent required to process audio recording.')
@@ -639,7 +673,7 @@ async def analyze_audio(
     turns = []
     words = []
     full_text = ""
-    speakers = ["Speaker 1", "Speaker 2"]
+    speakers = []
     
     if key:
         try:
@@ -656,6 +690,7 @@ async def analyze_audio(
                     },
                     files={'file': (f'audio{ext}', raw, content_type)}
                 )
+                resp.raise_for_status()
                 if resp.status_code == 200:
                     data = resp.json()
                     full_text = data.get('text', '')
@@ -664,14 +699,19 @@ async def analyze_audio(
                         speaker_map = {}
                         current_turn = None
                         for w in raw_words:
+                            if w.get('type', 'word') != 'word':
+                                continue
+                            start, end = w.get('start'), w.get('end')
+                            if not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or not (0 <= start <= end):
+                                raise ValueError('Missing or invalid word timestamps')
                             raw_spk = w.get('speaker_id') or 'speaker_0'
                             if raw_spk not in speaker_map:
                                 speaker_map[raw_spk] = f"Speaker {len(speaker_map) + 1}"
                             spk_label = speaker_map[raw_spk]
                             w_item = {
                                 "text": w.get('text', ''),
-                                "start": round(float(w.get('start', 0.0)), 2),
-                                "end": round(float(w.get('end', 0.0)), 2),
+                                "start": round(start, 2),
+                                "end": round(end, 2),
                                 "speaker": spk_label
                             }
                             words.append(w_item)
@@ -690,55 +730,16 @@ async def analyze_audio(
                         if current_turn:
                             turns.append(current_turn)
                         speakers = list(speaker_map.values())
-        except Exception as e:
-            print(f"[Aegis ElevenLabs Scribe Diarization Error, using fallback]: {e}", flush=True)
+        except Exception:
+            turns = []
 
     if not turns:
-        turns = [
-            {
-                "speaker": "Speaker 1",
-                "start": 12.0,
-                "end": 17.5,
-                "text": "I asked you not to contact me again."
-            },
-            {
-                "speaker": "Speaker 2",
-                "start": 27.0,
-                "end": 31.8,
-                "text": "I will keep sending messages."
-            },
-            {
-                "speaker": "Speaker 1",
-                "start": 45.2,
-                "end": 49.0,
-                "text": "This is harassment. Please leave me alone."
-            },
-            {
-                "speaker": "Speaker 2",
-                "start": 65.4,
-                "end": 69.1,
-                "text": "You can't block me everywhere."
-            }
-        ]
-        speakers = ["Speaker 1", "Speaker 2"]
-        full_text = "Speaker 1: I asked you not to contact me again. Speaker 2: I will keep sending messages. Speaker 1: This is harassment. Please leave me alone. Speaker 2: You can't block me everywhere."
-        words = []
-        for t in turns:
-            w_list = t['text'].split()
-            duration = max(0.5, t['end'] - t['start'])
-            step = duration / max(1, len(w_list))
-            for i, w in enumerate(w_list):
-                words.append({
-                    "text": w,
-                    "start": round(t['start'] + i * step, 2),
-                    "end": round(t['start'] + (i + 1) * step, 2),
-                    "speaker": t['speaker']
-                })
+        raise HTTPException(502 if key else 503, 'No verified speaker transcript was returned. Your original audio is unchanged. Retry transcription or review it locally; no transcript has been invented.')
 
     return {
         "filename": filename,
         "sha256": sha256_hash,
-        "duration_seconds": round(turns[-1]['end'] if turns else 70.0, 1),
+        "duration_seconds": round(turns[-1]['end'], 1),
         "speakers": speakers,
         "turns": turns,
         "words": words,
@@ -749,13 +750,14 @@ async def analyze_audio(
 class StoryExtractInput(BaseModel):
     story_text: str = Field(min_length=1, max_length=10000)
     evidence_ids: list[str] = Field(default_factory=list, max_length=50)
+    consent: bool = False
 
 @app.post('/api/voice/story-extract')
 def story_extract(body: StoryExtractInput):
     text = body.story_text.strip()
     key = os.getenv('GEMINI_API_KEY')
     draft = None
-    if key:
+    if key and body.consent:
         try:
             from google import genai
             client = genai.Client(api_key=key, http_options={'timeout': 30000})
@@ -781,7 +783,7 @@ def story_extract(body: StoryExtractInput):
                     parsed = json.loads(res.text)
                     draft = {
                         "suggested_title": parsed.get('suggested_title', 'Documented incident'),
-                        "incident_date": parsed.get('incident_date', 'October 15, 2026'),
+                        "incident_date": parsed.get('incident_date', 'Unknown'),
                         "platform": parsed.get('platform', 'Digital communications'),
                         "what_happened": parsed.get('what_happened', text[:300]),
                         "missing_information": parsed.get('missing_information', 'Exact time is unknown; verify against records.')
@@ -799,13 +801,7 @@ def story_extract(body: StoryExtractInput):
                 platform = p
                 break
         
-        date_str = 'October 15, 2026'
-        for month in ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']:
-            if month.lower() in text.lower():
-                date_str = f'{month} 2026'
-                break
-        if 'yesterday' in text.lower(): date_str = 'Yesterday (user-reported)'
-        elif 'last week' in text.lower() or 'friday' in text.lower(): date_str = 'Recent Friday (user-reported)'
+        date_str = 'Unknown — enter the date you recall before saving'
 
         draft = {
             "suggested_title": f"Unwanted {platform} outreach" if platform != 'Digital communications' else "Documented incident",
@@ -855,92 +851,21 @@ def report(body:Report):
     return Response(buffer.getvalue(),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="aegis-report.pdf"'})
 
 class SSORequest(BaseModel):
-    provider: Literal['vultr', 'google', 'saml', 'demo'] = 'vultr'
-    code: Optional[str] = None
-    email: Optional[str] = None
+    provider: Literal['vultr','google','saml','demo'] = 'demo'
 
 @app.post('/api/auth/sso')
 def auth_sso(body: SSORequest):
-    provider = body.provider
-    if provider in ('vultr', 'demo'):
-        user = {
-            "id": "vultr-usr-882194",
-            "name": "Jamie Doe",
-            "email": body.email or "jamie@cloud.vultr.com",
-            "provider": "Vultr Cloud Authentication",
-            "provider_id": "vultr",
-            "avatar_initials": "J",
-            "role": "Case Owner / Survivor",
-            "vultr_region": "ewr",
-            "vultr_region_name": "New Jersey (EWR - High Frequency)",
-            "vultr_instance_id": "vultr-inst-49204",
-            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
-            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
-            "authenticated_at": now()
-        }
-        token = f"aegis_vultr_{uuid.uuid4().hex}"
-        return {"token": token, "user": user}
-    elif provider == 'google':
-        user = {
-            "id": "goog-usr-392019",
-            "name": "Jamie Doe",
-            "email": body.email or "jamie.doe@gmail.com",
-            "provider": "Google Workspace Identity",
-            "provider_id": "google",
-            "avatar_initials": "J",
-            "role": "Case Owner / Survivor",
-            "vultr_region": "ewr",
-            "vultr_region_name": "New Jersey (EWR - Hybrid Cloud)",
-            "vultr_instance_id": "vultr-inst-49204",
-            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
-            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
-            "authenticated_at": now()
-        }
-        token = f"aegis_goog_{uuid.uuid4().hex}"
-        return {"token": token, "user": user}
-    else:  # saml
-        user = {
-            "id": "saml-usr-771032",
-            "name": "Jamie Doe",
-            "email": body.email or "jamie@enterprise.org",
-            "provider": "Enterprise SAML / Okta SSO",
-            "provider_id": "saml",
-            "avatar_initials": "J",
-            "role": "Case Owner / Survivor",
-            "vultr_region": "ewr",
-            "vultr_region_name": "New Jersey (EWR - Dedicated Enterprise Enclave)",
-            "vultr_instance_id": "vultr-inst-49204",
-            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
-            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
-            "authenticated_at": now()
-        }
-        token = f"aegis_saml_{uuid.uuid4().hex}"
-        return {"token": token, "user": user}
+    if body.provider != 'demo':
+        raise HTTPException(501,'Provider authentication is not implemented. Use the synthetic preview; it is not a private account.')
+    return {'token':None,'user':{'id':'synthetic-demo','name':'Demo visitor','email':'','provider':'Synthetic preview — no authentication','provider_id':'demo','avatar_initials':'D','role':'Demo visitor','vultr_region':'','vultr_region_name':'Not applicable','vultr_instance_id':'Not applicable','vultr_datacenter':'No private storage guarantee','encryption_standard':'No encryption-at-rest guarantee','authenticated_at':None}}
 
 @app.get('/api/auth/me')
 def auth_me():
-    return {
-        "authenticated": True,
-        "user": {
-            "id": "vultr-usr-882194",
-            "name": "Jamie Doe",
-            "email": "jamie@cloud.vultr.com",
-            "provider": "Vultr Cloud Authentication",
-            "provider_id": "vultr",
-            "avatar_initials": "J",
-            "role": "Case Owner / Survivor",
-            "vultr_region": "ewr",
-            "vultr_region_name": "New Jersey (EWR - High Frequency)",
-            "vultr_instance_id": "vultr-inst-49204",
-            "vultr_datacenter": "Vultr Core Zero-Trust Enclave",
-            "encryption_standard": "AES-256-GCM / SHA-256 Byte Verification",
-            "authenticated_at": now()
-        }
-    }
+    return {'authenticated':False,'user':None,'mode':'synthetic-demo'}
 
 @app.post('/api/auth/logout')
 def auth_logout():
-    return {"ok": True, "message": "Session terminated"}
+    return {'ok':True,'message':'Preview closed; no authenticated session existed.'}
 
 DIST_DIR = Path(__file__).resolve().parents[2] / 'dist'
 if DIST_DIR.exists():

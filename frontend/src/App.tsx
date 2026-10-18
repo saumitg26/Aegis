@@ -11,6 +11,7 @@ import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { api, blobRequest, type State, type Evidence, type AuthUser } from './api';
 import { Button } from './components/ui/button';
+import { VoiceCapture } from './components/VoiceCapture';
 
 gsap.registerPlugin(useGSAP);
 
@@ -84,8 +85,6 @@ export default function App() {
   const [preview, setPreview] = useState('');
 
   // Voice recording state
-  const [recording, setRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [audioUrl, setAudioUrl] = useState('');
   const [userRecordedUrl, setUserRecordedUrl] = useState('');
   const [isSpeakingBrowser, setIsSpeakingBrowser] = useState(false);
@@ -94,24 +93,11 @@ export default function App() {
   const [incidentTitle, setIncidentTitle] = useState('');
   const [incidentTime, setIncidentTime] = useState('');
   const [incidentNotes, setIncidentNotes] = useState('');
-  const [incidentRecording, setIncidentRecording] = useState(false);
-  const [incidentRecordingSeconds, setIncidentRecordingSeconds] = useState(0);
 
   // Modern Companion UI State
   const [selectedEvidenceId, setSelectedEvidenceId] = useState('');
   const [evidenceFilter, setEvidenceFilter] = useState<'All' | 'Messages' | 'Emails' | 'Screenshots'>('All');
-  const [chatHistory, setChatHistory] = useState<Array<{ sender: 'user' | 'aegis'; text: string; time?: string }>>([
-    { sender: 'user', text: 'Can you summarize my case so far?' },
-    {
-      sender: 'aegis',
-      text: "Of course, Jamie. You've documented 5 key incidents between Jan 12, 2024 and Mar 3, 2024, including repeated messages, a concerning pattern of contact, and online harassment. I've organized your evidence, identified key patterns, and highlighted next steps we can take together."
-    },
-    { sender: 'user', text: 'What patterns did you find?' },
-    {
-      sender: 'aegis',
-      text: 'I found a pattern of repeated contact after boundary requests, an escalation over time in frequency, and multiple platforms being used. This suggests a coordinated pattern which is valuable to document in your final report.'
-    }
-  ]);
+  const [chatHistory, setChatHistory] = useState<Array<{ sender: 'user' | 'aegis'; text: string; time?: string }>>([]);
   const [slowerSpeech, setSlowerSpeech] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
 
@@ -144,19 +130,18 @@ export default function App() {
     text: string;
     limitations: string;
   } | null>(null);
+  const [audioFile,setAudioFile]=useState<File|null>(null);
+  const [evidenceAudioUrl,setEvidenceAudioUrl]=useState('');
+  const evidencePlayer=useRef<HTMLAudioElement|null>(null);
+  const [storyTime,setStoryTime]=useState('');
+  useEffect(()=>{if(!audioFile)return;const url=URL.createObjectURL(audioFile);setEvidenceAudioUrl(url);return()=>URL.revokeObjectURL(url)},[audioFile]);
   const [audioAnalyzing, setAudioAnalyzing] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [audioPlaybackTime, setAudioPlaybackTime] = useState(0);
   const [momentSavedToast, setMomentSavedToast] = useState('');
 
   // User Authentication & Vultr SSO state
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    const saved = localStorage.getItem('aegis_user');
-    if (saved) {
-      try { return JSON.parse(saved); } catch {}
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(false);
 
@@ -172,10 +157,10 @@ export default function App() {
     setError('');
     try {
       const res = await api<{ token: string; user: AuthUser }>('/auth/sso', { provider });
-      localStorage.setItem('aegis_auth_token', res.token);
+      localStorage.removeItem('aegis_auth_token');
       localStorage.setItem('aegis_user', JSON.stringify(res.user));
       setCurrentUser(res.user);
-      setNotice(`Signed in with ${res.user.provider} (${res.user.vultr_region.toUpperCase()})`);
+      setNotice('Synthetic preview opened. No private account or authentication is provided.');
     } catch (err: any) {
       setError(err.message || 'SSO authentication failed');
     } finally {
@@ -195,17 +180,9 @@ export default function App() {
   }
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const recorder = useRef<MediaRecorder | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const secondsInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const heading = useRef<HTMLHeadingElement | null>(null);
-  const speechRecognizer = useRef<any>(null);
 
-  const incidentRecorder = useRef<MediaRecorder | null>(null);
-  const incidentTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const incidentSecondsInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const incidentSpeechRecognizer = useRef<any>(null);
 
   async function refresh() {
     const state = await api<State>('/state');
@@ -224,9 +201,6 @@ export default function App() {
       .finally(() => setLoading(false));
 
     return () => {
-      recorder.current?.stream.getTracks().forEach(t => t.stop());
-      if (timer.current) clearTimeout(timer.current);
-      if (secondsInterval.current) clearInterval(secondsInterval.current);
       if (window.speechSynthesis) window.speechSynthesis.cancel();
     };
   }, []);
@@ -262,10 +236,8 @@ export default function App() {
   }, { scope: containerRef, dependencies: [page] });
 
   function navigate(name: string) {
-    if (recorder.current?.state === 'recording') {
-      recorder.current.stop();
-    }
     audioRef.current?.pause();
+    evidencePlayer.current?.pause();
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
       setIsSpeakingBrowser(false);
@@ -353,239 +325,9 @@ export default function App() {
     note: reportNote
   };
 
-  // Robust Voice Recording Handler with browser & fallback support
-  async function record() {
-    if (recording) {
-      if (recorder.current && recorder.current.state === 'recording') {
-        recorder.current.stop();
-      }
-      return;
-    }
-
-    if (!consent) {
-      setConsent(true);
-    }
-
-    await run(async () => {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      } catch (err) {
-        throw new Error('Microphone access was denied or not detected. Please check your browser microphone permission.');
-      }
-
-      try {
-        const mimeTypes = [
-          'audio/webm;codecs=opus',
-          'audio/webm',
-          'audio/mp4',
-          'audio/ogg',
-          'audio/wav'
-        ];
-        const supportedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m));
-        const rec = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
-        recorder.current = rec;
-        const chunks: BlobPart[] = [];
-
-        rec.ondataavailable = e => {
-          if (e.data.size > 0) chunks.push(e.data);
-        };
-
-        // Try setting up Web Speech API for real-time speech-to-text in Demo mode
-        let speechTranscript = '';
-        const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!health.voice && SpeechRec) {
-          try {
-            const sr = new SpeechRec();
-            sr.continuous = true;
-            sr.interimResults = true;
-            sr.lang = 'en-US';
-            sr.onresult = (ev: any) => {
-              let live = '';
-              for (let i = ev.resultIndex; i < ev.results.length; ++i) {
-                if (ev.results[i].isFinal) {
-                  live += ev.results[i][0].transcript;
-                }
-              }
-              if (live) speechTranscript = live;
-            };
-            sr.start();
-            speechRecognizer.current = sr;
-          } catch {
-            // Web speech optional fallback
-          }
-        }
-
-        rec.onstop = () => {
-          stream.getTracks().forEach(t => t.stop());
-          setRecording(false);
-          if (timer.current) clearTimeout(timer.current);
-          if (secondsInterval.current) clearInterval(secondsInterval.current);
-          if (speechRecognizer.current) {
-            try { speechRecognizer.current.stop(); } catch {}
-          }
-
-          const actualMime = rec.mimeType || supportedMime || 'audio/webm';
-          const ext = actualMime.includes('mp4') ? '.mp4' : actualMime.includes('ogg') ? '.ogg' : actualMime.includes('wav') ? '.wav' : '.webm';
-          const audioBlob = new Blob(chunks, { type: actualMime });
-
-          // Store for local playback
-          if (audioBlob.size > 0) {
-            setUserRecordedUrl(URL.createObjectURL(audioBlob));
-          }
-
-          void run(async () => {
-            if (health.voice) {
-              // ElevenLabs Scribe STT
-              const form = new FormData();
-              form.append('file', audioBlob, `recording${ext}`);
-              form.append('consent', 'true');
-              const result = await api<{ text: string }>('/voice/transcribe', form);
-              setQuestion(result.text);
-              setNotice('Transcript received from ElevenLabs. Review or edit before asking.');
-            } else {
-              // Demo mode fallback: use Web Speech transcript or intelligent demo query
-              const finalTranscript = speechTranscript.trim() ||
-                'I noticed repeated messages with identical links across the community forum. What connects these records?';
-              setQuestion(finalTranscript);
-              setNotice('Voice recording captured (Demo mode). You can edit the transcript below before confirming.');
-            }
-          });
-        };
-
-        rec.start(250);
-        setRecording(true);
-        setRecordingSeconds(0);
-
-        secondsInterval.current = setInterval(() => {
-          setRecordingSeconds(prev => {
-            if (prev >= 59) {
-              if (rec.state === 'recording') rec.stop();
-              return 60;
-            }
-            return prev + 1;
-          });
-        }, 1000);
-
-        timer.current = setTimeout(() => {
-          if (rec.state === 'recording') rec.stop();
-        }, 60000);
-      } catch (e) {
-        stream.getTracks().forEach(t => t.stop());
-        throw e;
-      }
-    });
-  }
-
-  // Accessibility: Voice Dictation for documenting incidents
-  async function toggleIncidentDictation() {
-    if (incidentRecording) {
-      if (incidentRecorder.current && incidentRecorder.current.state === 'recording') {
-        incidentRecorder.current.stop();
-      }
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeTypes = [
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/mp4',
-        'audio/ogg',
-        'audio/wav'
-      ];
-      const supportedMime = mimeTypes.find(m => MediaRecorder.isTypeSupported(m));
-      const rec = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
-      incidentRecorder.current = rec;
-      const chunks: BlobPart[] = [];
-
-      rec.ondataavailable = e => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-
-      const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-      if (SpeechRec) {
-        try {
-          const sr = new SpeechRec();
-          sr.continuous = true;
-          sr.interimResults = true;
-          sr.lang = 'en-US';
-          const baseNotes = incidentNotes;
-          sr.onresult = (ev: any) => {
-            let live = '';
-            for (let i = ev.resultIndex; i < ev.results.length; ++i) {
-              if (ev.results[i].isFinal) {
-                live += ev.results[i][0].transcript;
-              }
-            }
-            if (live) {
-              setIncidentNotes(baseNotes ? `${baseNotes} ${live.trim()}` : live.trim());
-            }
-          };
-          sr.start();
-          incidentSpeechRecognizer.current = sr;
-        } catch {}
-      }
-
-      rec.onstop = () => {
-        stream.getTracks().forEach(t => t.stop());
-        setIncidentRecording(false);
-        if (incidentTimer.current) clearTimeout(incidentTimer.current);
-        if (incidentSecondsInterval.current) clearInterval(incidentSecondsInterval.current);
-        if (incidentSpeechRecognizer.current) {
-          try { incidentSpeechRecognizer.current.stop(); } catch {}
-        }
-
-        const actualMime = rec.mimeType || supportedMime || 'audio/webm';
-        const ext = actualMime.includes('mp4') ? '.mp4' : actualMime.includes('ogg') ? '.ogg' : actualMime.includes('wav') ? '.wav' : '.webm';
-        const audioBlob = new Blob(chunks, { type: actualMime });
-
-        if (health.voice && audioBlob.size > 0) {
-          void run(async () => {
-            try {
-              const fd = new FormData();
-              fd.append('file', audioBlob, `incident_voice${ext}`);
-              fd.append('consent', 'true');
-              const res = await api<{ text: string }>('/voice/transcribe', fd);
-              if (res.text?.trim()) {
-                setIncidentNotes(prev => prev ? `${prev}\n${res.text.trim()}` : res.text.trim());
-                setNotice('Voice notes transcribed via ElevenLabs Scribe!');
-              }
-            } catch {
-              // fallback remains active
-            }
-          });
-        }
-      };
-
-      rec.start(250);
-      setIncidentRecording(true);
-      setIncidentRecordingSeconds(0);
-
-      incidentSecondsInterval.current = setInterval(() => {
-        setIncidentRecordingSeconds(prev => {
-          if (prev >= 59) {
-            if (rec.state === 'recording') rec.stop();
-            return 60;
-          }
-          return prev + 1;
-        });
-      }, 1000);
-
-      incidentTimer.current = setTimeout(() => {
-        if (rec.state === 'recording') rec.stop();
-      }, 60000);
-    } catch {
-      setError('Microphone access was denied or not detected. You can type notes directly.');
-    }
-  }
-
   // Handle TTS or Browser Speech Synthesis
   function handleSpeakResponse() {
-    if (!consent) {
-      setConsent(true);
-    }
+    if (!consent) { setError('Choose explicit ElevenLabs consent before requesting speech.'); return; }
     if (health.tts) {
       void run(async () => {
         try {
@@ -647,7 +389,7 @@ export default function App() {
       const r = await api<{ answer: string; mode: string }>('/ask', {
         question: promptText,
         evidence_ids: toUse,
-        consent: true
+        consent: aiConsent
       });
       const aegisMsg = {
         sender: 'aegis' as const,
@@ -671,7 +413,7 @@ export default function App() {
 
   function replayLastVoiceMessage() {
     const lastAegis = [...chatHistory].reverse().find(m => m.sender === 'aegis');
-    const textToSpeak = lastAegis ? lastAegis.text : answer || 'I found a pattern of repeated contact after boundary requests, an escalation over time in frequency, and multiple platforms being used.';
+    const textToSpeak = lastAegis ? lastAegis.text : answer || 'No response is available to play.';
     if (window.speechSynthesis) {
       window.speechSynthesis.cancel();
       const cleanText = textToSpeak.replace(/^.*?\n\n/, '');
@@ -717,7 +459,7 @@ export default function App() {
     try {
       const res = await api<{ draft: any }>('/voice/story-extract', {
         story_text: rawText,
-        evidence_ids: selected
+        evidence_ids: selected, consent: aiConsent
       });
       if (res.draft) {
         setStoryIncidentDraft(res.draft);
@@ -736,7 +478,7 @@ export default function App() {
       await api('/incidents', {
         title: storyIncidentDraft.suggested_title,
         description: `${storyIncidentDraft.what_happened}\n\nPlatform: ${storyIncidentDraft.platform}\nReported date: ${storyIncidentDraft.incident_date}\n\nNote: ${storyIncidentDraft.missing_information}`,
-        occurred_at: '2026-10-15T14:30:00Z'
+        occurred_at: storyTime ? new Date(storyTime).toISOString() : null
       }, 'POST');
       await refresh();
       setNotice('Incident saved directly to your case timeline and narrative!');
@@ -748,14 +490,18 @@ export default function App() {
   }
 
   async function handleAnalyzeAudio(artifactId?: string, fileObj?: File) {
+    if (!consent) {setError('Consent to ElevenLabs processing before analyzing audio.');return;}
+    const chosenFile=fileObj||audioFile;
+    setAudioAnalysis(null);
     setAudioAnalyzing(true);
     try {
       const fd = new FormData();
-      if (fileObj) {
-        fd.append('file', fileObj, fileObj.name);
+      if (chosenFile) {
+        fd.append('file', chosenFile, chosenFile.name);
       } else if (artifactId) {
         fd.append('artifact_id', artifactId);
-      }
+        setEvidenceAudioUrl('/api/evidence/'+artifactId+'/download');
+      } else {setEvidenceAudioUrl('/api/demo/audio');}
       fd.append('consent', 'true');
       const res = await api<any>('/voice/analyze-audio', fd);
       setAudioAnalysis(res);
@@ -768,22 +514,6 @@ export default function App() {
       setAudioAnalyzing(false);
     }
   }
-
-  useEffect(() => {
-    let interval: any = null;
-    if (audioPlaying && audioAnalysis) {
-      interval = setInterval(() => {
-        setAudioPlaybackTime(prev => {
-          if (prev >= audioAnalysis.duration_seconds) {
-            setAudioPlaying(false);
-            return 0;
-          }
-          return Math.round((prev + 0.5) * 10) / 10;
-        });
-      }, 500);
-    }
-    return () => { if (interval) clearInterval(interval); };
-  }, [audioPlaying, audioAnalysis]);
 
   function handleSaveMoment(turn: { speaker: string; start: number; end: number; text: string }) {
     const mins = Math.floor(turn.start / 60);
@@ -812,68 +542,16 @@ export default function App() {
             <h1 className="sso-title">AEGIS</h1>
             <div className="sso-subtitle">Your Digital Safety Companion</div>
             <div className="sso-desc">
-              A private, confidential space to document what happened and preserve cryptographic evidence with zero-trust enclave protection.
+              Explore incident documentation using fictional records. No authentication or encrypted private storage is provided.
             </div>
           </div>
 
           {error && <div className="banner error" style={{ width: '100%', marginBottom: 16 }}>{error}</div>}
           {notice && <div className="banner success" style={{ width: '100%', marginBottom: 16 }}>{notice}</div>}
 
-          <div className="sso-buttons-stack">
-            <button
-              className="sso-vultr-btn"
-              onClick={() => handleSSOLogin('vultr')}
-              disabled={ssoLoading}
-            >
-              <ShieldCheck size={18} />
-              <span>{ssoLoading ? 'Authenticating...' : 'Continue with Vultr SSO'}</span>
-            </button>
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: -4, marginBottom: 4 }}>
-              Isolated High-Frequency compute & cryptographic enclave (EWR)
-            </div>
+          <p>This is a public synthetic demonstration, not a private account. Do not submit personal records. Public uploads, edits and external processing are disabled.</p>
+          <Button onClick={()=>handleSSOLogin('demo')} disabled={ssoLoading}>Open synthetic preview</Button>
 
-            <button
-              className="sso-secondary-btn"
-              onClick={() => handleSSOLogin('google')}
-              disabled={ssoLoading}
-            >
-              <Mail size={16} />
-              <span>Continue with Google Workspace</span>
-            </button>
-
-            <button
-              className="sso-secondary-btn"
-              onClick={() => handleSSOLogin('saml')}
-              disabled={ssoLoading}
-            >
-              <LockKeyhole size={16} />
-              <span>Continue with Enterprise SAML / Okta</span>
-            </button>
-
-            <button
-              className="sso-demo-btn"
-              onClick={() => handleSSOLogin('demo')}
-              disabled={ssoLoading}
-            >
-              <Sparkles size={16} />
-              <span>Instant Demo Access as Jamie</span>
-            </button>
-          </div>
-
-          <div className="sso-trust-strip">
-            <div className="sso-trust-item">
-              <Shield size={13} style={{ color: '#10B981' }} />
-              <span>Zero-Knowledge</span>
-            </div>
-            <div className="sso-trust-item">
-              <LockKeyhole size={13} style={{ color: '#6366F1' }} />
-              <span>SHA-256 Verified</span>
-            </div>
-            <div className="sso-trust-item">
-              <Sparkles size={13} style={{ color: '#0284C7' }} />
-              <span>Vultr Cloud EWR</span>
-            </div>
-          </div>
         </div>
       </div>
     );
@@ -922,7 +600,7 @@ export default function App() {
 
         <div className="sidebar-companion-card">
           <span className="sidebar-companion-icon">🛡️</span>
-          <div className="sidebar-companion-title">Your private space</div>
+          <div className="sidebar-companion-title">Your demo workspace</div>
           <div className="sidebar-companion-text">
             Organize your records calmly and at your own pace. You decide what to document, review, and export.
           </div>
@@ -953,7 +631,7 @@ export default function App() {
               }}
             >
               <div className="user-avatar">{currentUser?.avatar_initials || 'J'}</div>
-              <span className="user-name">{currentUser?.name?.split(' ')[0] || 'Jamie'}</span>
+              <span className="user-name">{currentUser?.name?.split(' ')[0] || 'Demo'}</span>
               <span style={{ fontSize: 10, color: '#94A3B8' }}>{profileOpen ? '▲' : '▼'}</span>
 
               {profileOpen && (
@@ -963,38 +641,21 @@ export default function App() {
                       {currentUser?.avatar_initials || 'J'}
                     </div>
                     <div className="profile-header-meta">
-                      <div className="profile-header-name">{currentUser?.name || 'Jamie Doe'}</div>
-                      <div className="profile-header-email">{currentUser?.email || 'jamie@cloud.vultr.com'}</div>
+                      <div className="profile-header-name">{currentUser?.name || 'Demo visitor'}</div>
+                      <div className="profile-header-email">{currentUser?.email || 'No account'}</div>
                     </div>
                   </div>
 
                   <div className="vultr-status-badge">
                     <ShieldCheck size={14} />
-                    <span>{currentUser?.provider || 'Vultr Cloud Authentication'}</span>
+                    <span>{currentUser?.provider || 'Synthetic preview — no authentication'}</span>
                   </div>
 
-                  <div className="vultr-meta-card">
-                    <div className="vultr-meta-row">
-                      <span>Datacenter Enclave:</span>
-                      <strong>{currentUser?.vultr_region_name || 'New Jersey (EWR)'}</strong>
-                    </div>
-                    <div className="vultr-meta-row">
-                      <span>Instance ID:</span>
-                      <code>{currentUser?.vultr_instance_id || 'vultr-inst-49204'}</code>
-                    </div>
-                    <div className="vultr-meta-row">
-                      <span>Encryption:</span>
-                      <span>{currentUser?.encryption_standard || 'AES-256-GCM / SHA-256'}</span>
-                    </div>
-                    <div className="vultr-meta-row">
-                      <span>Role:</span>
-                      <strong>{currentUser?.role || 'Survivor Case Owner'}</strong>
-                    </div>
-                  </div>
+                  <p className="muted">Synthetic preview. No private account, verified hosting identity, or encryption-at-rest guarantee.</p>
 
                   <button className="profile-signout-btn" onClick={handleSignOut}>
                     <LockKeyhole size={14} />
-                    <span>Sign Out of AEGIS</span>
+                    <span>Leave preview</span>
                   </button>
                 </div>
               )}
@@ -1007,77 +668,7 @@ export default function App() {
           <span>Synthetic demonstration — please do not upload sensitive real-world records.</span>
         </div>
 
-        {/* Cozy Hero Banner with 4-Step Progress Journey */}
-        <section className="hero-banner gsap-stagger">
-          <div className="hero-illustration-area">
-            <div className="hero-avatar-art">
-              ☕
-              <span className="art-badge-text">You Got This 💜</span>
-            </div>
-          </div>
-          <div className="hero-text-area">
-            <h1 className="hero-greeting" ref={heading} tabIndex={-1}>
-              {page === 'Home' ? `Hi ${currentUser?.name?.split(' ')[0] || 'Jamie'},` : (pageTitles[page]?.[0] || page)}
-            </h1>
-            <div className="hero-sub">
-              {page === 'Home'
-                ? "I'm here to help you document what happened and guide you step by step."
-                : (pageTitles[page]?.[1] || '')}
-            </div>
-            <div className="hero-motto">
-              Your story matters. Take it at your own pace — I'm with you.
-            </div>
-
-            {/* 4 Step Journey in Banner */}
-            <div className="hero-journey-steps">
-              <div
-                className="journey-step-item"
-                style={{ cursor: 'pointer' }}
-                onClick={() => setModal(true)}
-              >
-                <span className="journey-num step-1">1</span>
-                <div className="journey-step-info">
-                  <strong>Tell your story</strong>
-                  <small>Share in your own words</small>
-                </div>
-              </div>
-              <div
-                className="journey-step-item"
-                style={{ cursor: 'pointer' }}
-                onClick={() => navigate('Evidence')}
-              >
-                <span className="journey-num step-2">2</span>
-                <div className="journey-step-info">
-                  <strong>Upload evidence</strong>
-                  <small>Screenshots, emails & files</small>
-                </div>
-              </div>
-              <div
-                className="journey-step-item"
-                style={{ cursor: 'pointer' }}
-                onClick={() => navigate('Insights')}
-              >
-                <span className="journey-num step-3">3</span>
-                <div className="journey-step-info">
-                  <strong>Review patterns</strong>
-                  <small>Gemini 3.8 Flash insights</small>
-                </div>
-              </div>
-              <div
-                className="journey-step-item"
-                style={{ cursor: 'pointer' }}
-                onClick={() => navigate('Reports')}
-              >
-                <span className="journey-num step-4">4</span>
-                <div className="journey-step-info">
-                  <strong>Export report</strong>
-                  <small>Forensic verified PDF</small>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
+        <div className="demo-safety-banner" role="note">Synthetic demonstration only. No real accounts, private storage, or preservation guarantee. Public hosting is read-only; use fictional data locally.</div>
         <main id="main">
           <div className="content t-page-transition">
             {error && (
@@ -1100,284 +691,7 @@ export default function App() {
             ) : (
               <>
                 {page === 'Home' ? (
-                  <div>
-                    <div className="grid-3">
-                      {/* What Happened Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">📄</span>
-                            <span className="card-title">What happened</span>
-                          </div>
-                          <button className="link-action" onClick={() => navigate('My case')}>
-                            View my case →
-                          </button>
-                        </div>
-                        <p className="case-summary-p">
-                          You've documented {data.incidents.length || 5} key incidents between Jan 12, 2024 and Mar 3, 2024, involving concerning messages, repeated contact, and online harassment. AEGIS is helping you organize your evidence and identify patterns.
-                        </p>
-                        <div className="stat-pills-row">
-                          <div className="stat-pill">
-                            <span className="stat-pill-icon">💬</span>
-                            <div className="stat-pill-text">
-                              <strong>{data.incidents.length || 5}</strong>
-                              <small>incidents</small>
-                            </div>
-                          </div>
-                          <div className="stat-pill">
-                            <span className="stat-pill-icon">📅</span>
-                            <div className="stat-pill-text">
-                              <strong>Jan 12 - Mar 3</strong>
-                              <small>date range</small>
-                            </div>
-                          </div>
-                          <div className="stat-pill">
-                            <span className="stat-pill-icon">📎</span>
-                            <div className="stat-pill-text">
-                              <strong>{data.evidence.length || 12}</strong>
-                              <small>evidence items</small>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Companion Insights Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">💡</span>
-                            <span className="card-title">Companion Insights</span>
-                          </div>
-                          <button className="link-action" onClick={() => navigate('Insights')}>
-                            See all insights →
-                          </button>
-                        </div>
-                        {data.findings.length > 0 ? (
-                          data.findings.slice(0, 3).map((f, idx) => (
-                            <div
-                              key={f.id}
-                              className="insight-item"
-                              style={{ cursor: 'pointer' }}
-                              onClick={() => {
-                                navigate('Insights');
-                                setTimeout(() => {
-                                  const el = document.getElementById(`finding-${f.id}`);
-                                  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                                }, 150);
-                              }}
-                            >
-                              <span className="insight-num">{idx + 1}</span>
-                              <div className="insight-content" style={{ flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
-                                  <strong>{f.title}</strong>
-                                  {f.decision === 'saved_pattern' || f.decision === 'accepted' ? (
-                                    <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#DCFCE7', color: '#15803d', border: '1px solid #BBF7D0', flexShrink: 0 }}>
-                                      ✓ Saved as pattern
-                                    </span>
-                                  ) : (
-                                    <button
-                                      type="button"
-                                      className="btn-accept-pill"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        run(async () => {
-                                          setData(prev => ({
-                                            ...prev,
-                                            findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'saved_pattern' } : item)
-                                          }));
-                                          await api('/findings/' + f.id, { decision: 'saved_pattern' }, 'PATCH');
-                                          await refresh();
-                                          setNotice('Connection saved as a possible pattern for your records.');
-                                        });
-                                      }}
-                                    >
-                                      Save as pattern →
-                                    </button>
-                                  )}
-                                </div>
-                                <p>{f.summary}</p>
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <>
-                            <div className="insight-item" onClick={() => navigate('Insights')}>
-                              <span className="insight-num">1</span>
-                              <div className="insight-content">
-                                <strong>Pattern of repeated contact</strong>
-                                <p>There were 17 instances of contact after you requested no further communication.</p>
-                              </div>
-                            </div>
-                            <div className="insight-item" onClick={() => navigate('Insights')}>
-                              <span className="insight-num">2</span>
-                              <div className="insight-content">
-                                <strong>Escalation over time</strong>
-                                <p>The frequency and tone increased in February, with more intense and concerning messages.</p>
-                              </div>
-                            </div>
-                            <div className="insight-item" onClick={() => navigate('Insights')}>
-                              <span className="insight-num">3</span>
-                              <div className="insight-content">
-                                <strong>Multiple platforms involved</strong>
-                                <p>Activity occurred across text messages, email, and social media, suggesting a coordinated pattern.</p>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                      </div>
-
-                      {/* Recent Evidence Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">📎</span>
-                            <span className="card-title">Recent evidence</span>
-                          </div>
-                          <button className="link-action" onClick={() => navigate('Evidence')}>
-                            View all evidence →
-                          </button>
-                        </div>
-                        {data.evidence.length > 0 ? (
-                          data.evidence.slice(0, 3).map((e) => (
-                            <button
-                              key={e.id}
-                              className="evidence-item-compact"
-                              onClick={() => {
-                                setSelectedEvidenceId(e.id);
-                                navigate('Evidence');
-                              }}
-                            >
-                              <span className={`evidence-icon-wrap ${e.source === 'Email' ? 'icon-mail' : 'icon-msg'}`}>
-                                {e.source === 'Email' ? '✉️' : '💬'}
-                              </span>
-                              <div className="evidence-item-info">
-                                <strong>{e.filename}</strong>
-                                <small>{formatDate(e.original_time)}</small>
-                              </div>
-                              <span style={{ color: '#94A3B8' }}>›</span>
-                            </button>
-                          ))
-                        ) : (
-                          <>
-                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
-                              <span className="evidence-icon-wrap icon-msg">💬</span>
-                              <div className="evidence-item-info">
-                                <strong>Text message screenshot</strong>
-                                <small>Mar 3, 2024 · 10:24 PM</small>
-                              </div>
-                              <span style={{ color: '#94A3B8' }}>›</span>
-                            </div>
-                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
-                              <span className="evidence-icon-wrap icon-mail">✉️</span>
-                              <div className="evidence-item-info">
-                                <strong>Email from unknown sender</strong>
-                                <small>Feb 18, 2024 · 2:17 PM</small>
-                              </div>
-                              <span style={{ color: '#94A3B8' }}>›</span>
-                            </div>
-                            <div className="evidence-item-compact" onClick={() => navigate('Evidence')}>
-                              <span className="evidence-icon-wrap icon-img">🖼️</span>
-                              <div className="evidence-item-info">
-                                <strong>Social media message</strong>
-                                <small>Jan 25, 2024 · 8:41 PM</small>
-                              </div>
-                              <span style={{ color: '#94A3B8' }}>›</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid-3" style={{ marginTop: 20 }}>
-                      {/* Connections Diagram Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">🕸️</span>
-                            <span className="card-title">Connections</span>
-                          </div>
-                          <button className="link-action" onClick={() => navigate('Insights')}>
-                            Open full view →
-                          </button>
-                        </div>
-                        <div className="connections-diagram-wrap">
-                          <div className="node-satellite node-1">💬 Messages (17)</div>
-                          <div className="node-satellite node-2">✉️ Email (6)</div>
-                          <div className="node-center">
-                            <span>👤</span>
-                            <span>You</span>
-                          </div>
-                          <div className="node-satellite node-3">👤 Unknown Number</div>
-                          <div className="node-satellite node-4">👥 Related Accounts (3)</div>
-                        </div>
-                      </div>
-
-                      {/* AEGIS Voice Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">🎙️</span>
-                            <span className="card-title">AEGIS Voice</span>
-                          </div>
-                          <button className="link-action" onClick={() => navigate('Voice companion')}>
-                            Try a prompt →
-                          </button>
-                        </div>
-                        <div className="voice-interactive-box">
-                          <button
-                            type="button"
-                            className={`voice-mic-circle ${recording ? 'active' : ''}`}
-                            onClick={() => {
-                              navigate('Voice companion');
-                            }}
-                            title="Open AEGIS Voice Companion"
-                          >
-                            🎙️
-                          </button>
-                          <div className="soundwave-line">
-                            <span className="wave-bar" style={{ height: 10 }} />
-                            <span className="wave-bar" style={{ height: 18 }} />
-                            <span className="wave-bar" style={{ height: 8 }} />
-                            <span className="wave-bar" style={{ height: 22 }} />
-                            <span className="wave-bar" style={{ height: 14 }} />
-                            <span className="wave-bar" style={{ height: 19 }} />
-                            <span className="wave-bar" style={{ height: 6 }} />
-                          </div>
-                          <div className="voice-callout-title">Tap to talk with AEGIS</div>
-                          <div className="voice-callout-sub">
-                            Ask questions, talk through what happened, or get guidance on next steps.
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Report Ready Card */}
-                      <div className="card gsap-stagger">
-                        <div className="card-header">
-                          <div className="card-title-group">
-                            <span className="card-icon">📋</span>
-                            <span className="card-title">Report Ready</span>
-                          </div>
-                        </div>
-                        <div className="report-card-content">
-                          <div className="report-doc-mock">
-                            <span>🌸</span>
-                            <span>AEGIS</span>
-                          </div>
-                          <div>
-                            <strong style={{ fontSize: '13px', color: '#0F172A', display: 'block', lineHeight: 1.3 }}>
-                              Your information is organized and ready when you are.
-                            </strong>
-                            <p style={{ fontSize: '11px', color: '#64748B', marginTop: 4, lineHeight: 1.4 }}>
-                              Generate a clear, structured report with your timeline, evidence, and key insights.
-                            </p>
-                            <button className="btn-gradient" onClick={() => navigate('Reports')}>
-                              Generate Report →
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                  <section className="home-simple"><h1 ref={heading} tabIndex={-1}>One step at a time.</h1><p>Keep a clear record of what happened. You decide what comes next.</p><Button onClick={()=>setModal(true)}>Document an incident</Button><h2>{data.case?.title||'Your case'}</h2><p>{data.incidents.length} documented incidents · {data.evidence.length} records</p><h2>Recent records</h2>{data.evidence.length?data.evidence.slice(-3).reverse().map(e=><button className="record" key={e.id} onClick={()=>setInspect(e)}><FileText size={18}/><span>{e.filename}<small>{formatDate(e.original_time)}</small></span></button>):<p>No records yet. Add synthetic evidence to get started.</p>}</section>
                 ) : (
                   <>
                     <div className="eyebrow">YOUR SPACE / {page.toUpperCase()}</div>
@@ -1436,7 +750,7 @@ export default function App() {
                           </tr>
                           <tr>
                             <td>Date range:</td>
-                            <td>Jan 12, 2024 – Mar 3, 2024</td>
+                            <td>Dates shown in your timeline</td>
                           </tr>
                           <tr>
                             <td>Primary concern:</td>
@@ -1560,7 +874,7 @@ export default function App() {
                             <Sparkles size={14} /> Helpful tip
                           </strong>
                           <p style={{ fontSize: 12, color: '#92400E', marginTop: 4, lineHeight: 1.45 }}>
-                            Upload anything that feels relevant — even if you're not sure. Every file is cryptographically hashed with SHA-256 for court-grade tamper evidence.
+                            Upload anything that feels relevant — even if you're not sure. Every file is cryptographically hashed with SHA-256 for a recorded file fingerprint; this does not establish authenticity or legal admissibility.
                           </p>
                         </div>
                       </div>
@@ -1631,7 +945,7 @@ export default function App() {
                                     <span style={{ fontSize: 11, color: '#64748B', display: 'block', marginBottom: 2 }}>
                                       {formatDate(e.original_time)}
                                     </span>
-                                    <span className="badge-status badge-reviewed">Verified</span>
+                                    <span className="badge-status badge-reviewed">Fingerprint recorded</span>
                                   </div>
                                 </button>
                               );
@@ -1645,7 +959,7 @@ export default function App() {
                             <>
                               <div className="card-header">
                                 <span className="card-title">Evidence Details</span>
-                                <span className="badge-status badge-reviewed">Verified</span>
+                                <span className="badge-status badge-reviewed">Fingerprint recorded</span>
                               </div>
 
                               <div className="chat-preview-box">
@@ -2072,7 +1386,7 @@ export default function App() {
                                       <div key={id} className="tech-record-meta">
                                         <span>{ev?.filename || id}:</span>
                                         <code>SHA-256: {ev?.sha256 ? `${ev.sha256.slice(0, 16)}...` : 'N/A'}</code>
-                                        <span className="muted">({ev?.imported_at ? new Date(ev.imported_at).toLocaleDateString() : 'Verified'})</span>
+                                        <span className="muted">({ev?.imported_at ? new Date(ev.imported_at).toLocaleDateString() : 'Import time unknown'})</span>
                                       </div>
                                     );
                                   })}
@@ -2120,9 +1434,10 @@ export default function App() {
                               setData(s);
                               const ids = s.evidence.map(e => e.id);
                               setSelected(ids);
-                              setAiConsent(true);
+                              if(!aiConsent)throw Error('Please consent to Google processing first.');
                               setNotice('Sample records loaded. Analyzing with Gemini...');
-                              await api('/analyze', { evidence_ids: ids, consent: true });
+                              if(!aiConsent)throw Error('Please consent to Google processing first.');
+                              await api('/analyze', { evidence_ids: ids, consent: aiConsent });
                               await refresh();
                               setNotice('AI suggestions are ready for review.');
                               return;
@@ -2133,9 +1448,10 @@ export default function App() {
                               setSelected(toAnalyze);
                             }
                             if (!aiConsent) {
-                              setAiConsent(true);
+                              if(!aiConsent)throw Error('Please consent to Google processing first.');
                             }
-                            await api('/analyze', { evidence_ids: toAnalyze, consent: true });
+                            if(!aiConsent)throw Error('Please consent to Google processing first.');
+                            await api('/analyze', { evidence_ids: toAnalyze, consent: aiConsent });
                             await refresh();
                             setNotice('AI suggestions are ready for review.');
                           })
@@ -2228,55 +1544,9 @@ export default function App() {
                           </small>
                         </div>
 
-                        {/* Interactive Recording Console */}
-                        <div className={`story-recording-console ${recording ? 'recording' : ''}`}>
-                          <div style={{ fontSize: 13, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
-                            {recording ? '● Live Recording Active' : 'Recording Visualization · Ready'}
-                          </div>
-
-                          <div className="story-soundwave-bars" aria-hidden="true">
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                            <span className="soundwave-bar" />
-                          </div>
-
-                          <div style={{ fontSize: 14, fontWeight: 600, color: recording ? '#FCA5A5' : '#E2E8F0' }}>
-                            {recording
-                              ? `Listening... ${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00`
-                              : 'Press record when you are ready to speak'}
-                          </div>
-
-                          <div className="story-controls-row">
-                            <button
-                              type="button"
-                              className={`btn-story-record ${recording ? 'recording' : ''}`}
-                              onClick={record}
-                            >
-                              {recording ? <Square size={16} /> : <Mic size={16} />}
-                              <span>{recording ? 'Stop & Transcribe' : 'Start Recording'}</span>
-                            </button>
-
-                            {recording && (
-                              <button
-                                type="button"
-                                className="icon-btn"
-                                style={{ background: '#334155', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 999, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                                onClick={() => {
-                                  if (recording) {
-                                    record();
-                                  }
-                                }}
-                              >
-                                <Pause size={14} /> Pause
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
+                        <VoiceCapture enabled={health.voice} onTranscript={text=>setStoryTypedInput(previous=>[previous,text].filter(Boolean).join('\n'))}/>
+                        <label>Optional incident date and time (your timezone)<input type="datetime-local" value={storyTime} onChange={e=>setStoryTime(e.target.value)}/></label>
+                        <label><input type="checkbox" checked={aiConsent} onChange={e=>setAiConsent(e.target.checked)}/>Send this story to Google for an AI draft. Without consent, keep a local draft of my own words.</label>
                         {/* Optional Typed Input Box */}
                         <div className="card" style={{ marginBottom: 20 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -2425,7 +1695,9 @@ export default function App() {
 
                     {/* MODE 2: REVIEW RECORDINGS (Audio Evidence Analyzer) */}
                     {voiceMode === 'recordings' && (
-                      <div>
+                      <div><label className="check-label"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/>I consent to sending selected audio to ElevenLabs. The provider may retain it.</label>
+                      {evidenceAudioUrl&&<audio ref={evidencePlayer} src={evidenceAudioUrl} controls onTimeUpdate={e=>setAudioPlaybackTime(e.currentTarget.currentTime)} onPlay={()=>setAudioPlaying(true)} onPause={()=>setAudioPlaying(false)} onEnded={()=>setAudioPlaying(false)} aria-label="Original audio recording"/>}
+
                         {momentSavedToast && (
                           <div className="banner success" style={{ marginBottom: 16 }}>
                             📌 <strong>Moment Captured:</strong> {momentSavedToast}
@@ -2453,7 +1725,7 @@ export default function App() {
                                   style={{ display: 'none' }}
                                   onChange={e => {
                                     const f = e.target.files?.[0];
-                                    if (f) void handleAnalyzeAudio(undefined, f);
+                                    if (f) {setAudioFile(f);setAudioAnalysis(null);setAudioPlaying(false);}
                                   }}
                                 />
                               </label>
@@ -2464,51 +1736,14 @@ export default function App() {
                                 onClick={() => void handleAnalyzeAudio()}
                                 disabled={audioAnalyzing}
                               >
-                                {audioAnalyzing ? 'Transcribing...' : 'Load Demo Audio 🎧'}
+                                {audioAnalyzing ? 'Transcribing...' : audioFile ? 'Transcribe selected audio' : 'Transcribe synthetic fixture'}
                               </button>
                             </div>
                           </div>
 
                           {audioAnalysis ? (
                             <>
-                              {/* Audio Player Scrubber */}
-                              <div
-                                className="audio-track-scrubber"
-                                onClick={e => {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  const pos = (e.clientX - rect.left) / rect.width;
-                                  setAudioPlaybackTime(Math.round(pos * audioAnalysis.duration_seconds * 10) / 10);
-                                  setAudioPlaying(true);
-                                }}
-                              >
-                                <div
-                                  className="audio-track-progress"
-                                  style={{ width: `${Math.min(100, (audioPlaybackTime / Math.max(1, audioAnalysis.duration_seconds)) * 100)}%` }}
-                                />
-                              </div>
-
-                              <div className="audio-time-row">
-                                <span>
-                                  {Math.floor(audioPlaybackTime / 60).toString().padStart(2, '0')}:
-                                  {Math.floor(audioPlaybackTime % 60).toString().padStart(2, '0')}
-                                </span>
-                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                                  <button
-                                    type="button"
-                                    className="icon-btn"
-                                    style={{ width: 32, height: 32, background: '#EEF2FF', color: '#4F46E5', border: '1px solid #C7D2FE' }}
-                                    onClick={() => setAudioPlaying(prev => !prev)}
-                                  >
-                                    {audioPlaying ? <Pause size={16} /> : <Play size={16} />}
-                                  </button>
-                                  <span>{audioPlaying ? 'Playing' : 'Paused'}</span>
-                                </div>
-                                <span>
-                                  {Math.floor(audioAnalysis.duration_seconds / 60).toString().padStart(2, '0')}:
-                                  {Math.floor(audioAnalysis.duration_seconds % 60).toString().padStart(2, '0')}
-                                </span>
-                              </div>
-
+                              <p>Playback uses the original audio. Transcript timestamps are provider estimates.</p>
                               {/* Diarized Transcript Turns */}
                               <div style={{ marginTop: 24 }}>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -2543,8 +1778,8 @@ export default function App() {
                                               type="button"
                                               className="turn-timestamp-btn"
                                               onClick={() => {
-                                                setAudioPlaybackTime(turn.start);
-                                                setAudioPlaying(true);
+                                                if(evidencePlayer.current) evidencePlayer.current.currentTime=turn.start;
+                                                void evidencePlayer.current?.play().catch(()=>setError('Playback failed. Use the audio controls.'));
                                               }}
                                               title="Jump audio to this second"
                                             >
@@ -2651,44 +1886,8 @@ export default function App() {
                               </button>
                             </div>
 
-                            {/* Live soundwave during recording */}
-                            {recording && (
-                              <div className="recording-indicator" role="status" style={{ marginBottom: 12 }}>
-                                <span className="recording-timer-pill">
-                                  <span className="recording-timer-dot" />
-                                  Listening... {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
-                                </span>
-                                <div className="t-soundwave" aria-hidden="true">
-                                  <span className="t-soundwave-bar" />
-                                  <span className="t-soundwave-bar" />
-                                  <span className="t-soundwave-bar" />
-                                  <span className="t-soundwave-bar" />
-                                  <span className="t-soundwave-bar" />
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="chat-messages">
-                              {chatHistory.map((msg, idx) => (
-                                <div key={idx} className={`chat-msg-row ${msg.sender === 'user' ? 'user' : ''}`}>
-                                  {msg.sender === 'aegis' && (
-                                    <div className="chat-avatar">🌸</div>
-                                  )}
-                                  <div className="chat-msg-bubble">
-                                    {msg.text}
-                                    {msg.time && (
-                                      <small style={{ display: 'block', fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
-                                        {msg.time}
-                                      </small>
-                                    )}
-                                  </div>
-                                  {msg.sender === 'user' && (
-                                    <div className="chat-avatar" style={{ background: '#6366F1', color: '#fff' }}>J</div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-
+                            <VoiceCapture enabled={health.voice} onTranscript={setQuestion}/>
+                            <label><input type="checkbox" checked={aiConsent} onChange={e=>setAiConsent(e.target.checked)}/>Send my question and selected records to Google.</label>
                             <div className="chat-input-bar">
                               <button
                                 type="button"
@@ -2712,15 +1911,7 @@ export default function App() {
                                 }}
                               />
 
-                              <button
-                                type="button"
-                                className={`icon-btn ${recording ? 'pulse-icon' : ''}`}
-                                style={{ width: 28, height: 28, border: 'none', background: recording ? '#FEE2E2' : 'none', color: recording ? '#DC2626' : '#64748B' }}
-                                onClick={record}
-                                title={recording ? 'Stop recording' : 'Record question (ElevenLabs Scribe / Web)'}
-                              >
-                                {recording ? <Square size={14} /> : <Mic size={15} />}
-                              </button>
+
 
                               <button
                                 type="button"
@@ -2930,36 +2121,11 @@ export default function App() {
 
               <div className="dictate-section-header">
                 <label style={{ margin: 0 }}>Your notes</label>
-                <button
-                  type="button"
-                  className={`dictate-voice-btn ${incidentRecording ? 'active' : ''}`}
-                  onClick={toggleIncidentDictation}
-                  title="Speak to dictate your incident notes (Accessibility)"
-                >
-                  {incidentRecording ? <Square size={13} /> : <Mic size={13} />}
-                  <span>{incidentRecording ? 'Stop dictation' : 'Dictate with Voice (Accessibility)'}</span>
-                  {incidentRecording && (
-                    <span className="dictate-timer-badge">
-                      {Math.floor(incidentRecordingSeconds / 60)}:{(incidentRecordingSeconds % 60).toString().padStart(2, '0')}
-                    </span>
-                  )}
-                </button>
+
               </div>
 
-              {incidentRecording && (
-                <div className="recording-indicator inline-dictate" role="status">
-                  <span className="recording-timer-pill">
-                    <span className="recording-timer-dot" /> Listening... Speak naturally to dictate notes
-                  </span>
-                  <div className="t-soundwave" aria-hidden="true">
-                    <span className="t-soundwave-bar" />
-                    <span className="t-soundwave-bar" />
-                    <span className="t-soundwave-bar" />
-                    <span className="t-soundwave-bar" />
-                    <span className="t-soundwave-bar" />
-                  </div>
-                </div>
-              )}
+              <VoiceCapture enabled={health.voice} onTranscript={text=>setIncidentNotes(previous=>[previous,text].filter(Boolean).join('\n'))}/>
+
 
               <textarea
                 name="description"
@@ -2976,7 +2142,7 @@ export default function App() {
                 </Button>
                 <Dialog.Close asChild>
                   <Button variant="ghost" type="button" onClick={() => {
-                    if (incidentRecording) incidentRecorder.current?.stop();
+
                   }}>Cancel</Button>
                 </Dialog.Close>
               </div>

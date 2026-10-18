@@ -4,6 +4,14 @@ A calm workspace for documenting online incidents, preserving original records, 
 
 React 19 + TypeScript + Vite frontend; FastAPI + SQLAlchemy backend. Local SQLite requires no cloud account. Plus Jakarta Sans is self-hosted. The project was built from an empty repository, guided by the supplied AEGIS brief.
 
+## Public preview and privacy
+
+Render runs with `PUBLIC_DEMO=true`. It serves fixed synthetic fixtures, never reads saved cases into the public preview, and rejects database downloads, uploads, edits, reports and paid provider requests. The preview has no real authentication: Google/Vultr/SAML login is unavailable and the demo visitor receives no access token. Do not use this build for private or real survivor records.
+
+The full workflow is available locally on loopback only. Do not expose local mode to the internet. Real multi-user authentication, ownership checks, secure persistent storage and retention controls are still required before private deployment. Docker builds exclude local databases, artifacts and environment files.
+
+Recording is local; a separate consent checkbox and explicit action are required to send audio to ElevenLabs. Failed transcription preserves the original clip and never substitutes invented speech. Incident dates stay unknown unless supplied by the user. Google extraction has its own explicit consent.
+
 ## Run locally
 
 Requires Node 20.19+ (Node 24 tested), Python 3.11+ (3.12 tested).
@@ -23,7 +31,7 @@ In a second terminal, from the repository root:
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. On Home choose **Explore demo case**, or seed with:
+Open http://127.0.0.1:5173. For local sample data, seed with:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/api/seed

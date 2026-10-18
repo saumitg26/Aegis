@@ -6,8 +6,9 @@ from fastapi.testclient import TestClient
 def env(tmp_path,monkeypatch):
     monkeypatch.setenv('DATABASE_URL','sqlite:///'+str(tmp_path/'test.db'))
     monkeypatch.setenv('ARTIFACT_DIR',str(tmp_path/'artifacts'))
-    monkeypatch.delenv('GEMINI_API_KEY',raising=False)
-    monkeypatch.delenv('ELEVENLABS_API_KEY',raising=False)
+    monkeypatch.setenv('PUBLIC_DEMO','false')
+    monkeypatch.setenv('GEMINI_API_KEY','')
+    monkeypatch.setenv('ELEVENLABS_API_KEY','')
     import backend.app.main as m
     m=importlib.reload(m)
     return TestClient(m.app),m
@@ -116,29 +117,12 @@ def test_voice_adapter_with_mock(env,monkeypatch):
 
 def test_sso_authentication(env):
     c, m = env
-    # Test Vultr SSO
-    res = c.post('/api/auth/sso', json={'provider': 'vultr'})
-    assert res.status_code == 200
-    data = res.json()
-    assert 'token' in data
-    assert data['user']['email'] == 'jamie@cloud.vultr.com'
-    assert data['user']['vultr_region'] == 'ewr'
-    assert 'Vultr' in data['user']['provider']
-
-    # Test Google SSO
-    res_goog = c.post('/api/auth/sso', json={'provider': 'google'})
-    assert res_goog.status_code == 200
-    assert 'Google' in res_goog.json()['user']['provider']
-
-    # Test /api/auth/me
-    res_me = c.get('/api/auth/me')
-    assert res_me.status_code == 200
-    assert res_me.json()['authenticated'] is True
-
-    # Test logout
-    res_logout = c.post('/api/auth/logout')
-    assert res_logout.status_code == 200
-    assert res_logout.json()['ok'] is True
+    for provider in ['vultr', 'google', 'saml']:
+        assert c.post('/api/auth/sso', json={'provider': provider}).status_code == 501
+    response = c.post('/api/auth/sso', json={'provider': 'demo'})
+    assert response.status_code == 200 and response.json()['token'] is None
+    assert c.get('/api/auth/me').json()['authenticated'] is False
+    assert c.post('/api/auth/logout').json()['ok'] is True
 
 def test_fallback_ai_analysis_and_accept_suggestion(env, monkeypatch):
     c, m = env
@@ -201,14 +185,10 @@ def test_audio_artifact_import_and_analysis(env):
 
     # Test analyze-audio endpoint with artifact_id
     res_analyze = c.post('/api/voice/analyze-audio', data={'artifact_id': ev['id'], 'consent': 'true'})
-    assert res_analyze.status_code == 200
-    data = res_analyze.json()
-    assert 'turns' in data
-    assert 'speakers' in data
-    assert len(data['turns']) >= 2
-    assert 'Speaker 1' in data['speakers']
-    assert 'limitations' in data
-    assert 'sha256' in data
+    assert res_analyze.status_code == 503
+    assert 'turns' not in res_analyze.json()
+    assert c.get('/api/evidence/'+ev['id']+'/download').content == fake_wav_bytes
+    assert ev['sha256'] == hashlib.sha256(fake_wav_bytes).hexdigest()
 
 def test_story_extract_and_incident_creation(env):
     c, m = env
@@ -218,7 +198,8 @@ def test_story_extract_and_incident_creation(env):
     assert res.status_code == 200
     draft = res.json()['draft']
     assert 'Discord' in draft['platform']
-    assert 'October' in draft['incident_date']
+    assert draft['incident_date'].startswith('Unknown')
+    assert draft['what_happened'] == story
     assert 'what_happened' in draft
     assert 'user-reported' in draft['user_reported_disclaimer']
 
@@ -233,3 +214,63 @@ def test_story_extract_and_incident_creation(env):
     assert any(i['title'] == draft['suggested_title'] for i in state['incidents'])
 
 
+
+def test_public_preview_never_exposes_database_or_mutations(env,monkeypatch):
+    c,m=env
+    c.post('/api/incidents',json={'title':'Private local note'})
+    monkeypatch.setenv('PUBLIC_DEMO','true')
+    state=c.get('/api/state').json()
+    assert state['incidents']==[] and state['case']['id']=='demo'
+    assert all(e['id'].startswith('DEMO-') for e in state['evidence'])
+    for method,path in [('POST','/api/evidence'),('POST','/api/voice/analyze-audio'),('POST','/api/analyze'),('PUT','/api/case'),('DELETE','/api/evidence/anything'),('GET','/api/evidence/anything/download')]:
+        assert c.request(method,path).status_code==403
+    assert c.get('/api/health').json()['public_demo'] is True
+    assert c.get('/api/auth/me').json()['authenticated'] is False
+    assert c.post('/api/auth/sso',json={'provider':'google'}).status_code==501
+    result=c.post('/api/auth/sso',json={'provider':'demo'}).json()
+    assert result['token'] is None
+
+def test_audio_never_fabricates_transcript(env,monkeypatch):
+    c,m=env
+    assert c.post('/api/voice/analyze-audio',files={'file':('test.wav',b'RIFFdemo','audio/wav')}).status_code==400
+    monkeypatch.setenv('ELEVENLABS_API_KEY','')
+    r=c.post('/api/voice/analyze-audio',files={'file':('test.wav',b'RIFFdemo','audio/wav')},data={'consent':'true'})
+    assert r.status_code==503 and 'turns' not in r.json()
+    monkeypatch.setenv('ELEVENLABS_API_KEY','fake-test-key')
+    class Fake:
+        def __init__(self,**kwargs):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def post(self,url,**kwargs):return m.httpx.Response(200,json={'text':'','words':[]},request=m.httpx.Request('POST',url))
+    monkeypatch.setattr(m.httpx,'AsyncClient',Fake)
+    r=c.post('/api/voice/analyze-audio',files={'file':('test.wav',b'RIFFdemo','audio/wav')},data={'consent':'true'})
+    assert r.status_code==502 and 'turns' not in r.json()
+
+def test_story_does_not_invent_dates_or_send_without_consent(env,monkeypatch):
+    c,m=env
+    monkeypatch.setenv('GEMINI_API_KEY','must-not-be-used')
+    from google import genai
+    def fail(**kwargs):raise AssertionError('No consent, no provider call')
+    monkeypatch.setattr(genai,'Client',fail)
+    r=c.post('/api/voice/story-extract',json={'story_text':'A message arrived.','evidence_ids':[]})
+    assert r.status_code==200 and r.json()['draft']['incident_date'].startswith('Unknown')
+    assert r.json()['draft']['what_happened']=='A message arrived.'
+
+
+def test_audio_uses_only_provider_words_and_timestamps(env, monkeypatch):
+    c,m=env
+    monkeypatch.setenv('ELEVENLABS_API_KEY','fake-test-key')
+    payload={'text':'Hello there','words':[{'text':'Hello','start':1.2,'end':1.7,'type':'word','speaker_id':'a'},{'text':'there','start':2.0,'end':2.4,'type':'word','speaker_id':'b'}]}
+    class Fake:
+        def __init__(self,**kwargs):pass
+        async def __aenter__(self):return self
+        async def __aexit__(self,*args):pass
+        async def post(self,url,**kwargs):return m.httpx.Response(200,json=payload,request=m.httpx.Request('POST',url))
+    monkeypatch.setattr(m.httpx,'AsyncClient',Fake)
+    def request():return c.post('/api/voice/analyze-audio',files={'file':('test.wav',b'RIFFdemo','audio/wav')},data={'consent':'true'})
+    response=request()
+    assert response.status_code==200
+    assert [t['text'] for t in response.json()['turns']]==['Hello','there']
+    assert [t['start'] for t in response.json()['turns']]==[1.2,2.0]
+    del payload['words'][1]['start']
+    assert request().status_code==502

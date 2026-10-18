@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, Response, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, String, JSON, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, Session
+from . import demo_sessions as guests
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
@@ -44,18 +45,47 @@ app.add_middleware(
 def public_demo():
     return os.getenv('PUBLIC_DEMO', 'true' if os.getenv('RENDER') else 'false').lower() == 'true'
 
+def request_engine():
+    space = guests.current.get()
+    if public_demo() and space is None: raise HTTPException(401, 'Open a demo workspace first.')
+    return space.engine if space else engine
+
+def artifact_dir():
+    space = guests.current.get()
+    if public_demo() and space is None: raise HTTPException(401, 'Open a demo workspace first.')
+    return space.artifacts if space else ARTIFACT_DIR
+
 @app.middleware('http')
 async def protect_public_demo(request: Request, call_next):
-    # Public hosting exposes fixtures, never the shared local database or paid APIs.
-    if public_demo() and request.url.path.startswith('/api/'):
-        path = request.url.path
-        if request.method == 'GET' and path == '/api/state':
-            return JSONResponse(demo_snapshot())
-        allowed = request.method == 'GET' and path in ['/api/health', '/api/auth/me', '/api/demo/audio']
-        allowed = allowed or request.method == 'POST' and path in ['/api/auth/sso', '/api/auth/logout']
-        if not allowed:
-            return JSONResponse({'detail':'Public synthetic preview is read-only. Run locally to upload, record, analyze, or save. Real accounts and private storage are not implemented.'}, status_code=403)
-    return await call_next(request)
+    if not public_demo() or not request.url.path.startswith('/api/'):
+        return await call_next(request)
+    path = request.url.path
+    guests.clean()
+    space = guests.lookup(request.cookies.get(guests.COOKIE))
+    if request.method not in ['GET', 'HEAD', 'OPTIONS']:
+        origin = request.headers.get('origin')
+        if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
+            return JSONResponse({'detail':'Cross-site requests are not allowed.'}, status_code=403)
+    public_paths = ['/api/health','/api/auth/me','/api/auth/sso','/api/auth/logout','/api/demo/audio']
+    if not space and path not in public_paths:
+        if request.method == 'GET' and path == '/api/state': return JSONResponse(demo_snapshot())
+        return JSONResponse({'detail':'Open a demo workspace to continue. Your previous session may have expired.'}, status_code=401)
+    token = guests.current.set(space)
+    if space: space.active += 1
+    try:
+        if space and request.method == 'POST' and path in ['/api/analyze','/api/ask','/api/voice/transcribe','/api/voice/speak','/api/voice/analyze-audio','/api/voice/story-extract']:
+            guests.charge_provider(space)
+        if space and request.method in ['POST','PUT','PATCH']:
+            if sum(p.stat().st_size for p in space.directory.rglob('*') if p.is_file()) > 25*1024*1024:
+                raise HTTPException(413, 'Demo workspace storage limit reached. Remove unused records.')
+        response = await call_next(request)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except HTTPException as exc:
+        return JSONResponse({'detail':exc.detail}, status_code=exc.status_code)
+    finally:
+        guests.current.reset(token)
+        if space: space.active -= 1
 
 def demo_snapshot():
     artifacts, events = [], []
@@ -125,7 +155,7 @@ def import_artifact(s, name, raw):
     if not raw or len(raw) > 10 * 1024 * 1024: raise HTTPException(413, 'Choose a nonempty file smaller than 10 MB.')
     events, status = parse_file(name, raw)
     aid = ident('EV')
-    path = ARTIFACT_DIR / aid
+    path = artifact_dir() / aid
     path.write_bytes(raw)
     ext = Path(name).suffix.lower()
     source = 'Audio Recording' if ext in ['.wav', '.mp3', '.m4a', '.ogg', '.webm'] else (events[0]['platform'] if events else 'Image')
@@ -157,7 +187,7 @@ def connections(events):
     return result
 
 @app.get('/api/health')
-def health(): return dict(status='ok', synthetic_only=True, public_demo=public_demo(), gemini=not public_demo() and bool(os.getenv('GEMINI_API_KEY')), voice=not public_demo() and bool(os.getenv('ELEVENLABS_API_KEY')), tts=not public_demo() and bool(os.getenv('ELEVENLABS_API_KEY')))
+def health(): return dict(status='ok', synthetic_only=True, public_demo=public_demo(), gemini=bool(os.getenv('GEMINI_API_KEY')), voice=bool(os.getenv('ELEVENLABS_API_KEY')), tts=bool(os.getenv('ELEVENLABS_API_KEY')))
 def seed_initial_findings(s):
     arts = all_records(s, 'artifact')
     if not arts:
@@ -241,7 +271,7 @@ def seed_initial_findings(s):
 
 @app.get('/api/state')
 def state():
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         cases=all_records(s,'case')
         seed_initial_findings(s)
         findings=all_records(s,'finding')
@@ -251,7 +281,7 @@ class CaseInput(BaseModel):
     description: str=Field(default='',max_length=4000)
 @app.put('/api/case')
 def case_update(body: CaseInput):
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         r=s.get(Record,'case-demo')
         data=dict(id='case-demo',**body.model_dump(),updated_at=now())
         if r:r.data=data
@@ -264,32 +294,32 @@ class IncidentInput(BaseModel):
 @app.post('/api/incidents')
 def add_incident(body: IncidentInput):
     if body.occurred_at and not timestamp(body.occurred_at): raise HTTPException(422,'Provide a date with a timezone offset, or leave it unknown.')
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         id=ident('IN'); data=dict(id=id,**body.model_dump(),created_at=now())
         s.add(Record(id=id,kind='incident',data=data)); s.commit(); return data
 @app.post('/api/evidence')
 async def upload(file: UploadFile=File(...)):
     raw=await file.read(10*1024*1024+1)
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         data=import_artifact(s,file.filename or 'unknown',raw); s.commit(); return data
 @app.get('/api/evidence/{id}/download')
 def download(id:str):
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         r=get(s,id)
         if r.kind!='artifact': raise HTTPException(404,'Artifact not found')
-        return FileResponse(ARTIFACT_DIR/id,media_type='application/octet-stream',filename=r.data['filename'])
+        return FileResponse(artifact_dir()/id,media_type='application/octet-stream',filename=r.data['filename'])
 @app.delete('/api/evidence/{id}')
 def delete(id:str):
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         r=get(s,id)
         if r.kind!='artifact':raise HTTPException(404,'Artifact not found')
         for e in list(s.scalars(select(Record))):
             if e.data.get('evidence_id')==id or id in e.data.get('evidence_ids',[]):s.delete(e)
-        s.delete(r); s.commit(); (ARTIFACT_DIR/id).unlink(missing_ok=True)
+        s.delete(r); s.commit(); (artifact_dir()/id).unlink(missing_ok=True)
     return {'deleted':id}
 @app.post('/api/reconstruct')
 def reconstruct():
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         for f in connections(all_records(s,'event')):
             if not s.get(Record,f['id']): s.add(Record(id=f['id'],kind='finding',data=f))
         s.commit()
@@ -297,7 +327,7 @@ def reconstruct():
 class Review(BaseModel): decision: Literal['accepted','rejected','pending','saved_pattern','not_relevant','review_later']
 @app.patch('/api/findings/{id}')
 def review(id:str,body:Review):
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         r=get(s,id)
         if r.kind!='finding':raise HTTPException(404,'Finding not found')
         dec = body.decision
@@ -308,7 +338,7 @@ def review(id:str,body:Review):
         return r.data
 @app.post('/api/seed')
 def seed():
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         if s.get(Record,'case-demo'):
             seed_initial_findings(s)
             return {'ok':True,'existing':True}
@@ -319,7 +349,7 @@ def seed():
                 import_artifact(s,name,p.read_bytes())
         s.commit()
     reconstruct()
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         seed_initial_findings(s)
     return {'ok':True}
 
@@ -434,8 +464,8 @@ def fallback_ai_analysis(rows, evidence_ids):
 def gemini(rows):
     from google import genai
     client = genai.Client(api_key=os.environ['GEMINI_API_KEY'], http_options={'timeout': 30000})
-    models = [os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')]
-    for m in ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
+    models = [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]
+    for m in ['gemini-2.5-flash']:
         if m not in models: models.append(m)
     errors = {}
     for model in models:
@@ -472,7 +502,7 @@ def gemini(rows):
 def analyze(body:Selection):
     if not body.consent:raise HTTPException(400,'Explicit consent is required before sending evidence to Google.')
     if not os.getenv('GEMINI_API_KEY'):raise HTTPException(503,'Gemini is not configured. Local connection review is available.')
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         rows=selected(s,body.evidence_ids)
         result = None
         origin = 'Gemini'
@@ -549,7 +579,7 @@ class Answer(BaseModel):
     quotations:dict[str,str]
 @app.post('/api/ask')
 def ask(body:Ask):
-    with Session(engine) as s:
+    with Session(request_engine()) as s:
         rows=selected(s,body.evidence_ids)
         if not body.consent:
             return dict(mode='Local demo · no AI service used',answer=f'You selected {len(body.evidence_ids)} records containing {len(rows)} events. Review the original messages and timestamps, include only relevant records, and review suggested connections before exporting. This typed demo provides a fixed checklist; it does not interpret your question.',evidence_ids=body.evidence_ids)
@@ -557,8 +587,8 @@ def ask(body:Ask):
         try:
             from google import genai
             client=genai.Client(api_key=os.environ['GEMINI_API_KEY'],http_options={'timeout':30000})
-            models = [os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')]
-            for m in ['gemini-3.8-flash', 'gemini-3.8-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']:
+            models = [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]
+            for m in ['gemini-2.5-flash']:
                 if m not in models: models.append(m)
             last_err = None
             for model in models:
@@ -650,12 +680,12 @@ async def analyze_audio(
         if len(raw) > 10 * 1024 * 1024:
             raise HTTPException(413, 'Audio recording must be under 10 MB.')
     elif artifact_id:
-        with Session(engine) as s:
+        with Session(request_engine()) as s:
             r = get(s, artifact_id)
             if r.kind != 'artifact':
                 raise HTTPException(404, 'Artifact not found.')
             filename = r.data.get('filename', 'recording.wav')
-            file_path = ARTIFACT_DIR / artifact_id
+            file_path = artifact_dir() / artifact_id
             if file_path.exists():
                 raw = file_path.read_bytes()
     
@@ -773,7 +803,7 @@ def story_extract(body: StoryExtractInput):
                 "- what_happened: 1-3 clear sentences summarizing the core incident\n"
                 "- missing_information: note any unclear facts, e.g., 'Exact time is unknown'\n"
             )
-            for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']:
+            for model_name in [os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')]:
                 try:
                     res = client.models.generate_content(
                         model=model_name,
@@ -842,10 +872,10 @@ def report_text(s,body):
     return text
 @app.post('/api/report/preview')
 def report_preview(body:Report):
-    with Session(engine) as s:return {'text':report_text(s,body)}
+    with Session(request_engine()) as s:return {'text':report_text(s,body)}
 @app.post('/api/report')
 def report(body:Report):
-    with Session(engine) as s:text=report_text(s,body)
+    with Session(request_engine()) as s:text=report_text(s,body)
     buffer=io.BytesIO();styles=getSampleStyleSheet()
     SimpleDocTemplate(buffer,title='AEGIS incident summary').build([x for line in text.split('\n\n') for x in (Paragraph(escape(line).replace('\n','<br/>'),styles['BodyText']),Spacer(1,12))])
     return Response(buffer.getvalue(),media_type='application/pdf',headers={'Content-Disposition':'attachment; filename="aegis-report.pdf"'})
@@ -854,18 +884,31 @@ class SSORequest(BaseModel):
     provider: Literal['vultr','google','saml','demo'] = 'demo'
 
 @app.post('/api/auth/sso')
-def auth_sso(body: SSORequest):
+async def auth_sso(body: SSORequest, request: Request, response: Response):
     if body.provider != 'demo':
-        raise HTTPException(501,'Provider authentication is not implemented. Use the synthetic preview; it is not a private account.')
-    return {'token':None,'user':{'id':'synthetic-demo','name':'Demo visitor','email':'','provider':'Synthetic preview — no authentication','provider_id':'demo','avatar_initials':'D','role':'Demo visitor','vultr_region':'','vultr_region_name':'Not applicable','vultr_instance_id':'Not applicable','vultr_datacenter':'No private storage guarantee','encryption_standard':'No encryption-at-rest guarantee','authenticated_at':None}}
+        raise HTTPException(501,'Vultr sign-in needs a registered OAuth application, client credentials and callback setup. The interactive guest demo works now; no Vultr identity has been fabricated.')
+    if public_demo():
+        space = guests.current.get() or guests.create(Base.metadata)
+        context = guests.current.set(space)
+        try: seed()
+        finally: guests.current.reset(context)
+        response.set_cookie(guests.COOKIE, space.token, max_age=guests.TTL, httponly=True, secure=request.url.scheme=='https' or bool(os.getenv('RENDER')), samesite='strict')
+    return {'token':None, 'user':demo_user()}
+
+def demo_user():
+    return {'id':'synthetic-demo','name':'Demo visitor','email':'','provider':'Guest demo session','provider_id':'demo','avatar_initials':'D','role':'Demo visitor','vultr_region':'','vultr_region_name':'Not applicable','vultr_instance_id':'Not applicable','vultr_datacenter':'No private storage guarantee','encryption_standard':'No encryption-at-rest guarantee','authenticated_at':None}
 
 @app.get('/api/auth/me')
 def auth_me():
-    return {'authenticated':False,'user':None,'mode':'synthetic-demo'}
+    space = guests.current.get()
+    return {'authenticated':False,'session_active':bool(space),'user':demo_user() if space else None,'mode':'guest-demo'}
 
 @app.post('/api/auth/logout')
-def auth_logout():
-    return {'ok':True,'message':'Preview closed; no authenticated session existed.'}
+def auth_logout(response: Response):
+    space = guests.current.get()
+    if space: space.revoked = True
+    response.delete_cookie(guests.COOKIE)
+    return {'ok':True,'message':'Guest session closed.'}
 
 DIST_DIR = Path(__file__).resolve().parents[2] / 'dist'
 if DIST_DIR.exists():
@@ -876,7 +919,8 @@ if DIST_DIR.exists():
     async def serve_spa(full_path: str):
         if full_path.startswith('api/'):
             raise HTTPException(404, 'API endpoint not found')
-        target = DIST_DIR / full_path
+        target = (DIST_DIR / full_path).resolve()
+        if not target.is_relative_to(DIST_DIR.resolve()): raise HTTPException(404, 'File not found')
         if target.is_file():
             return FileResponse(target)
         resp = FileResponse(DIST_DIR / 'index.html')

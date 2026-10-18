@@ -160,7 +160,8 @@ export default function App() {
       localStorage.removeItem('aegis_auth_token');
       localStorage.setItem('aegis_user', JSON.stringify(res.user));
       setCurrentUser(res.user);
-      setNotice('Synthetic preview opened. No private account or authentication is provided.');
+      await refresh();
+      setNotice('Demo workspace ready. Your changes stay in this temporary browser session.');
     } catch (err: any) {
       setError(err.message || 'SSO authentication failed');
     } finally {
@@ -191,8 +192,9 @@ export default function App() {
   }
 
   useEffect(() => {
-    Promise.all([api<State>('/state'), api<typeof health>('/health')])
-      .then(([state, h]) => {
+    Promise.all([api<State>('/state'), api<typeof health>('/health'), api<{session_active:boolean;user:AuthUser|null}>('/auth/me')])
+      .then(([state, h, session]) => {
+        if(session.session_active && session.user) setCurrentUser(session.user);
         setData(state);
         setHealth(h);
         setSelected(state.evidence.map(e => e.id));
@@ -542,15 +544,17 @@ export default function App() {
             <h1 className="sso-title">AEGIS</h1>
             <div className="sso-subtitle">Your Digital Safety Companion</div>
             <div className="sso-desc">
-              Explore incident documentation using fictional records. No authentication or encrypted private storage is provided.
+              Turn scattered records into a clear, source-linked account. Try the full workflow with fictional evidence.
             </div>
           </div>
 
           {error && <div className="banner error" style={{ width: '100%', marginBottom: 16 }}>{error}</div>}
           {notice && <div className="banner success" style={{ width: '100%', marginBottom: 16 }}>{notice}</div>}
 
-          <p>This is a public synthetic demonstration, not a private account. Do not submit personal records. Public uploads, edits and external processing are disabled.</p>
-          <Button onClick={()=>handleSSOLogin('demo')} disabled={ssoLoading}>Open synthetic preview</Button>
+          <p>Your demo workspace supports uploads, voice, analysis and PDF reports. It expires after two hours or a server restart. Use fictional data only.</p>
+          <Button onClick={()=>handleSSOLogin('demo')} disabled={ssoLoading}>{ssoLoading?'Opening workspace…':'Try the interactive demo'}</Button>
+          <Button variant="outline" onClick={()=>handleSSOLogin('vultr')} disabled={ssoLoading}>Continue with Vultr · setup required</Button>
+          <small>Vultr OAuth needs a registered application before sign-in can work. <a href="https://docs.vultr.com/platform/iam/oauth" target="_blank" rel="noreferrer">Integration setup</a></small>
 
         </div>
       </div>
@@ -620,7 +624,7 @@ export default function App() {
             />
           </div>
           <div className="top-actions">
-            <button className="icon-btn" title="Synthetic Demo Workspace" onClick={() => navigate('Insights')}>
+            <button className="icon-btn" title="Interactive Demo Workspace" onClick={() => navigate('Insights')}>
               <Bell size={16} />
             </button>
             <div
@@ -651,11 +655,11 @@ export default function App() {
                     <span>{currentUser?.provider || 'Synthetic preview — no authentication'}</span>
                   </div>
 
-                  <p className="muted">Synthetic preview. No private account, verified hosting identity, or encryption-at-rest guarantee.</p>
+                  <p className="muted">Temporary guest workspace. Changes are isolated from other demo visitors and are not permanent storage.</p>
 
                   <button className="profile-signout-btn" onClick={handleSignOut}>
                     <LockKeyhole size={14} />
-                    <span>Leave preview</span>
+                    <span>End demo session</span>
                   </button>
                 </div>
               )}
@@ -668,7 +672,7 @@ export default function App() {
           <span>Synthetic demonstration — please do not upload sensitive real-world records.</span>
         </div>
 
-        <div className="demo-safety-banner" role="note">Synthetic demonstration only. No real accounts, private storage, or preservation guarantee. Public hosting is read-only; use fictional data locally.</div>
+        <div className="demo-safety-banner" role="note">Interactive demo · Your workspace expires after two hours or a server restart. Use fictional records. External AI requires your consent.</div>
         <main id="main">
           <div className="content t-page-transition">
             {error && (

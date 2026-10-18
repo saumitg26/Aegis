@@ -4,13 +4,17 @@ A calm workspace for documenting online incidents, preserving original records, 
 
 React 19 + TypeScript + Vite frontend; FastAPI + SQLAlchemy backend. Local SQLite requires no cloud account. Plus Jakarta Sans is self-hosted. The project was built from an empty repository, guided by the supplied AEGIS brief.
 
-## Public preview and privacy
+## Interactive hosted demo
 
-Render runs with `PUBLIC_DEMO=true`. It serves fixed synthetic fixtures, never reads saved cases into the public preview, and rejects database downloads, uploads, edits, reports and paid provider requests. The preview has no real authentication: Google/Vultr/SAML login is unavailable and the demo visitor receives no access token. Do not use this build for private or real survivor records.
+Render runs with `PUBLIC_DEMO=true`. Choose **Try the interactive demo** to create a separate temporary workspace with sample records. Upload fictional evidence, save incidents, review findings, transcribe with consent and export PDFs. Refreshing preserves the session. Ending the session revokes access; sessions expire after two hours or a process restart. Expired files are cleaned on subsequent traffic. Export what you need before leaving.
 
-The full workflow is available locally on loopback only. Do not expose local mode to the internet. Real multi-user authentication, ownership checks, secure persistent storage and retention controls are still required before private deployment. Docker builds exclude local databases, artifacts and environment files.
+Guest sessions use random HttpOnly, SameSite cookies and separate SQLite databases/artifact directories. They cannot access the shared local database or other visitors' records. This is a **single-process hackathon demo**, not durable production storage. Run one worker/instance; multiple instances need a shared session store and proper user authentication. Use fictional records only. Docker excludes local databases and secrets.
 
-Recording is local; a separate consent checkbox and explicit action are required to send audio to ElevenLabs. Failed transcription preserves the original clip and never substitutes invented speech. Incident dates stay unknown unless supplied by the user. Google extraction has its own explicit consent.
+Bounds: 50 concurrent workspaces, 100 workspace creations per hour, a 25 MB storage threshold (a final upload can exceed this by at most the 10 MB file limit), and 10 assisted endpoint requests per session / 40 globally per hour. These limits are in-memory and reset on process restart. Endpoint requests count even if a provider is unavailable. Reports and ordinary editing do not consume AI allowance.
+
+Microphone recording stays local until an explicit transcription action and ElevenLabs consent. Google processing has separate consent. Provider errors never invent audio transcripts. Keys stay on the server.
+
+**Vultr sign-in is not connected.** The button explains the missing setup; it does not fake a Vultr identity. A registered OAuth application, limited scopes, client credentials, allowed callbacks and a verified authorization-code/PKCE flow are required. See [Vultr's integration guide](https://docs.vultr.com/platform/iam/oauth/access-tokens/how-to-integrate-a-third-party-app-with-vultr-oauth). The current Render deployment is not Vultr hosting.
 
 ## Run locally
 

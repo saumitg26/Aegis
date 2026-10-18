@@ -223,7 +223,7 @@ def test_public_preview_never_exposes_database_or_mutations(env,monkeypatch):
     assert state['incidents']==[] and state['case']['id']=='demo'
     assert all(e['id'].startswith('DEMO-') for e in state['evidence'])
     for method,path in [('POST','/api/evidence'),('POST','/api/voice/analyze-audio'),('POST','/api/analyze'),('PUT','/api/case'),('DELETE','/api/evidence/anything'),('GET','/api/evidence/anything/download')]:
-        assert c.request(method,path).status_code==403
+        assert c.request(method,path).status_code==401
     assert c.get('/api/health').json()['public_demo'] is True
     assert c.get('/api/auth/me').json()['authenticated'] is False
     assert c.post('/api/auth/sso',json={'provider':'google'}).status_code==501
@@ -274,3 +274,37 @@ def test_audio_uses_only_provider_words_and_timestamps(env, monkeypatch):
     assert [t['start'] for t in response.json()['turns']]==[1.2,2.0]
     del payload['words'][1]['start']
     assert request().status_code==502
+
+
+def test_guest_workspaces_are_interactive_and_isolated(env, monkeypatch):
+    c,m=env
+    monkeypatch.setenv('PUBLIC_DEMO','true')
+    a,b=TestClient(m.app),TestClient(m.app)
+    assert a.post('/api/auth/sso',json={'provider':'demo'}).status_code==200
+    assert b.post('/api/auth/sso',json={'provider':'demo'}).status_code==200
+    assert a.cookies.get(m.guests.COOKIE)!=b.cookies.get(m.guests.COOKIE)
+    assert a.get('/api/auth/me').json()['session_active'] is True
+    assert a.post('/api/incidents',json={'title':'Only visitor A'}).status_code==200
+    assert b.get('/api/state').json()['incidents']==[]
+    uploaded=a.post('/api/evidence',files={'file':('synthetic.txt',b'Only guest A can download these synthetic bytes')}).json()
+    assert a.get('/api/evidence/'+uploaded['id']+'/download').status_code==200
+    assert b.get('/api/evidence/'+uploaded['id']+'/download').status_code==404
+    assert b.delete('/api/evidence/'+uploaded['id']).status_code==404
+    assert a.post('/api/report',json={'evidence_ids':[uploaded['id']]}).content.startswith(b'%PDF')
+    assert a.post('/api/incidents',json={'title':'cross-site'},headers={'Origin':'https://other.example'}).status_code==403
+    assert a.post('/api/auth/logout').status_code==200
+    assert a.post('/api/incidents',json={'title':'after logout'}).status_code==401
+    assert b.post('/api/incidents',json={'title':'B still works'}).status_code==200
+
+
+def test_guest_expiry_and_ai_budget(env,monkeypatch):
+    c,m=env
+    monkeypatch.setenv('PUBLIC_DEMO','true')
+    c.post('/api/auth/sso',json={'provider':'demo'})
+    space=m.guests.lookup(c.cookies.get(m.guests.COOKIE))
+    space.calls=[m.guests.time.monotonic()]*10
+    assert c.post('/api/analyze',json={'evidence_ids':[],'consent':True}).status_code==429
+    assert c.post('/api/incidents',json={'title':'Editing still works'}).status_code==200
+    space.expires=0
+    assert c.post('/api/incidents',json={'title':'Expired'}).status_code==401
+    assert not space.directory.exists()

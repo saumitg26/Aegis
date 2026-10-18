@@ -415,3 +415,44 @@ def test_persistent_user_account_lifecycle(env, monkeypatch):
     assert del_res.json()['deleted'] == inc['id']
     st_deleted = c.get('/api/state', headers={'Authorization': f'Bearer {new_token}'}).json()
     assert not any(i['id'] == inc['id'] for i in st_deleted['incidents'])
+
+def test_flexible_json_and_csv_import(env):
+    c, m = env
+    # 1. JSON list format with alias fields
+    import json
+    chat_list = [
+        {'sender': 'Colleague', 'time': '2026-10-18T10:00:00Z', 'content': 'First warning.'},
+        {'user': 'Anonymous', 'date': '2026-10-18T10:05:00Z', 'text': 'Second warning message.'}
+    ]
+    r_json = c.post('/api/evidence', files={'file': ('chat_export.json', json.dumps(chat_list).encode('utf-8'))})
+    assert r_json.status_code == 200
+    assert r_json.json()['status'] == 'Parsed'
+    ev_id = r_json.json()['id']
+    state = c.get('/api/state').json()
+    events = [e for e in state['events'] if e['evidence_id'] == ev_id]
+    assert len(events) == 2
+    assert events[0]['sender'] == 'Colleague'
+    assert events[1]['content'] == 'Second warning message.'
+
+    # 2. CSV spreadsheet format
+    csv_data = b'timestamp,sender,content\n2026-10-18T11:00:00Z,Manager,Workplace harassment note\n'
+    r_csv = c.post('/api/evidence', files={'file': ('export.csv', csv_data)})
+    assert r_csv.status_code == 200
+    assert 'Parsed' in r_csv.json()['status']
+    csv_id = r_csv.json()['id']
+    state2 = c.get('/api/state').json()
+    csv_events = [e for e in state2['events'] if e['evidence_id'] == csv_id]
+    assert len(csv_events) == 1
+    assert csv_events[0]['sender'] == 'Manager'
+
+def test_report_includes_documented_incidents(env):
+    c, m = env
+    c.post('/api/incidents', json={'title': 'Repeated Discord stalking', 'description': 'Tracked user location and harassed friends', 'occurred_at': '2026-10-18T12:00:00Z'})
+    c.post('/api/incidents', json={'title': 'Voicemail threat', 'description': 'Caller stated they were waiting outside', 'occurred_at': '2026-10-18T13:00:00Z'})
+    
+    # Generate report preview with 0 evidence files selected
+    preview = c.post('/api/report/preview', json={'evidence_ids': [], 'redact': ['stalking'], 'note': 'Summary note'}).json()['text']
+    assert 'Documented Incidents' in preview
+    assert 'Repeated Discord [REDACTED]' in preview
+    assert 'Voicemail threat' in preview
+    assert 'waiting outside' in preview

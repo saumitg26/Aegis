@@ -228,16 +228,70 @@ def parse_file(name, raw):
     if ext == '.json':
         try:
             obj = json.loads(text)
-            messages = obj['messages']
-            if not isinstance(messages, list) or len(messages) > 500: raise ValueError()
+            platform = 'Chat'
+            if isinstance(obj, list):
+                messages = obj
+            elif isinstance(obj, dict):
+                platform = str(obj.get('platform', 'Chat'))[:100]
+                messages = obj.get('messages') or obj.get('events') or obj.get('chats') or obj.get('data')
+                if not isinstance(messages, list):
+                    raise ValueError('No messages list')
+            else:
+                raise ValueError('JSON must be array or object')
+            if len(messages) > 500:
+                raise ValueError('Message limit exceeded')
             rows = []
             for m in messages:
-                if not isinstance(m, dict) or not isinstance(m.get('content'), str): raise ValueError()
-                rows.append(dict(content=m['content'][:20000], sender=str(m.get('author', 'Unknown'))[:200], time=timestamp(m.get('timestamp')), source_time=str(m.get('timestamp', 'Unknown')), platform=str(obj.get('platform', 'Chat'))[:100]))
+                if not isinstance(m, dict):
+                    continue
+                content = m.get('content') or m.get('text') or m.get('body') or m.get('message')
+                if not isinstance(content, str) or not content.strip():
+                    continue
+                sender = m.get('author') or m.get('sender') or m.get('user') or m.get('from') or 'Unknown'
+                raw_time = m.get('timestamp') or m.get('time') or m.get('date') or m.get('created_at')
+                t_val = timestamp(str(raw_time)) if raw_time else None
+                rows.append(dict(
+                    content=content[:20000],
+                    sender=str(sender)[:200],
+                    time=t_val,
+                    source_time=str(raw_time or 'Unknown'),
+                    platform=str(m.get('platform') or platform)[:100]
+                ))
+            if not rows:
+                raise ValueError('No valid messages found')
             return rows, 'Parsed'
-        except (ValueError, KeyError, TypeError): raise HTTPException(422, 'Expected {"platform":"Chat", "messages":[{"content":"text", "author":"name", "timestamp":"ISO-8601 with timezone"}]} (up to 500 messages).')
+        except (ValueError, KeyError, TypeError):
+            raise HTTPException(422, 'Expected {"platform":"Chat", "messages":[{"content":"text", "author":"name", "timestamp":"ISO-8601 with timezone"}]} or a list of message objects (up to 500 messages).')
+    if ext == '.csv':
+        try:
+            import csv
+            reader = csv.DictReader(io.StringIO(text))
+            rows = []
+            for r in reader:
+                if len(rows) >= 500:
+                    break
+                content = r.get('content') or r.get('text') or r.get('body') or r.get('message')
+                if not content:
+                    content = ' | '.join(f"{k}: {v}" for k, v in r.items() if v)
+                if not content.strip():
+                    continue
+                sender = r.get('author') or r.get('sender') or r.get('user') or r.get('from') or 'Unknown'
+                raw_time = r.get('timestamp') or r.get('time') or r.get('date') or r.get('created_at')
+                t_val = timestamp(str(raw_time)) if raw_time else None
+                rows.append(dict(
+                    content=content[:20000],
+                    sender=str(sender)[:200],
+                    time=t_val,
+                    source_time=str(raw_time or 'Unknown'),
+                    platform=str(r.get('platform', 'CSV export'))[:100]
+                ))
+            if not rows:
+                raise ValueError('Empty or invalid CSV')
+            return rows, 'Parsed · CSV'
+        except Exception:
+            raise HTTPException(422, 'Could not parse CSV. Header row with content/message and author/sender recommended.')
     if ext == '.txt': return [dict(content=text[:20000], sender='Not specified', time=None, source_time='Unknown', platform='Text note')], 'Parsed · time unknown'
-    raise HTTPException(415, 'Supported formats: .eml, .json, .txt, .png, .jpg, .jpeg, .wav, .mp3, .m4a, .ogg, .webm')
+    raise HTTPException(415, 'Supported formats: .eml, .json, .txt, .csv, .png, .jpg, .jpeg, .wav, .mp3, .m4a, .ogg, .webm')
 
 def import_artifact(s, name, raw):
     if not raw or len(raw) > 10 * 1024 * 1024: raise HTTPException(413, 'Choose a nonempty file smaller than 10 MB.')
@@ -950,15 +1004,23 @@ class Report(BaseModel):
     include_findings:bool=True
 
 def report_text(s,body):
-    case=all_records(s,'case'); arts=all_records(s,'artifact')
+    case=all_records(s,'case'); arts=all_records(s,'artifact'); incidents=all_records(s,'incident')
     if not set(body.evidence_ids)<={a['id'] for a in arts}:raise HTTPException(422,'Unknown evidence selection')
     lines=['AEGIS | User-prepared incident summary','Synthetic demonstration',case[0]['title'] if case else 'Untitled case',body.note,'Evidence register']
     for a in arts:
         if a['id'] in body.evidence_ids:lines += [f"{a['id']} | {a['filename']} | SHA-256: {a['sha256']}"]
+    if incidents:
+        lines+=['Documented Incidents']
+        for inc in sorted(incidents, key=lambda x: x.get('occurred_at') or x.get('created_at') or ''):
+            date_info = f" ({inc['occurred_at']})" if inc.get('occurred_at') else ""
+            desc = f"\n{inc['description']}" if inc.get('description') else ""
+            lines += [f"• {inc['title']}{date_info}{desc}"]
     if body.include_timeline:
         lines+=['Timeline (UTC; unknown times are not inferred)']
         for e in sorted(all_records(s,'event'),key=lambda x:x['time'] or '9999'):
-            if e['evidence_id'] in body.evidence_ids:lines += [f"{e['time'] or 'Time unknown'} | {e['evidence_id']} | {e['content']}"]
+            if e['evidence_id'] in body.evidence_ids:
+                sender_str = f" | From: {e['sender']}" if e.get('sender') and e['sender'] != 'Not specified' else ""
+                lines += [f"{e['time'] or 'Time unknown'} | {e['evidence_id']}{sender_str} | {e['content']}"]
     if body.include_findings:
         lines+=['User-reviewed patterns (saved as relevant to experience)']
         for f in all_records(s,'finding'):

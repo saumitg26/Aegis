@@ -96,7 +96,7 @@ export default function App() {
 
   // Modern Companion UI State
   const [selectedEvidenceId, setSelectedEvidenceId] = useState('');
-  const [evidenceFilter, setEvidenceFilter] = useState<'All' | 'Messages' | 'Emails' | 'Screenshots'>('All');
+  const [evidenceFilter, setEvidenceFilter] = useState<'All' | 'Messages' | 'Emails' | 'Screenshots' | 'Audio'>('All');
   const [chatHistory, setChatHistory] = useState<Array<{ sender: 'user' | 'aegis'; text: string; time?: string }>>([]);
   const [slowerSpeech, setSlowerSpeech] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
@@ -1496,9 +1496,10 @@ export default function App() {
                   const filteredEvidence = data.evidence.filter(e => {
                     const matchesSearch = e.filename.toLowerCase().includes(search.toLowerCase());
                     if (!matchesSearch) return false;
-                    if (evidenceFilter === 'Messages') return e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message');
+                    if (evidenceFilter === 'Messages') return e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message') || e.filename.toLowerCase().includes('chat');
                     if (evidenceFilter === 'Emails') return e.source.toLowerCase().includes('email') || e.filename.toLowerCase().includes('eml') || e.filename.toLowerCase().includes('mail');
                     if (evidenceFilter === 'Screenshots') return e.source.toLowerCase().includes('image') || e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg') || e.filename.toLowerCase().includes('screen');
+                    if (evidenceFilter === 'Audio') return e.source.toLowerCase().includes('audio') || e.filename.toLowerCase().includes('recording') || e.filename.toLowerCase().includes('.wav') || e.filename.toLowerCase().includes('.webm') || e.filename.toLowerCase().includes('.mp3') || e.filename.toLowerCase().includes('.m4a');
                     return true;
                   });
 
@@ -1517,7 +1518,7 @@ export default function App() {
                             type="file"
                             disabled={busy}
                             style={{ display: 'none' }}
-                            accept=".eml,.json,.txt,.png,.jpg,.jpeg"
+                            accept=".eml,.json,.txt,.csv,.png,.jpg,.jpeg,.wav,.mp3,.m4a,.ogg,.webm"
                             onChange={e => {
                               const file = e.target.files?.[0];
                               if (file) {
@@ -1547,7 +1548,7 @@ export default function App() {
                         {/* Evidence Table */}
                         <div className="evidence-table-card">
                           <div className="filter-pills">
-                            {(['All', 'Messages', 'Emails', 'Screenshots'] as const).map(tab => (
+                            {(['All', 'Messages', 'Emails', 'Screenshots', 'Audio'] as const).map(tab => (
                               <button
                                 key={tab}
                                 type="button"
@@ -1556,9 +1557,10 @@ export default function App() {
                               >
                                 {tab} ({
                                   tab === 'All' ? data.evidence.length :
-                                  tab === 'Messages' ? data.evidence.filter(e => e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message')).length :
+                                  tab === 'Messages' ? data.evidence.filter(e => e.source.toLowerCase().includes('message') || e.filename.toLowerCase().includes('message') || e.filename.toLowerCase().includes('chat')).length :
                                   tab === 'Emails' ? data.evidence.filter(e => e.source.toLowerCase().includes('email') || e.filename.toLowerCase().includes('eml') || e.filename.toLowerCase().includes('mail')).length :
-                                  data.evidence.filter(e => e.source.toLowerCase().includes('image') || e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg') || e.filename.toLowerCase().includes('screen')).length
+                                  tab === 'Screenshots' ? data.evidence.filter(e => e.source.toLowerCase().includes('image') || e.filename.toLowerCase().includes('png') || e.filename.toLowerCase().includes('jpg') || e.filename.toLowerCase().includes('screen')).length :
+                                  data.evidence.filter(e => e.source.toLowerCase().includes('audio') || e.filename.toLowerCase().includes('recording') || e.filename.toLowerCase().includes('.wav') || e.filename.toLowerCase().includes('.webm') || e.filename.toLowerCase().includes('.mp3') || e.filename.toLowerCase().includes('.m4a')).length
                                 })
                               </button>
                             ))}

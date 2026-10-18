@@ -149,14 +149,27 @@ def test_fallback_ai_analysis_and_accept_suggestion(env, monkeypatch):
     assert len(companion) >= 3
     finding_id = companion[0]['id']
 
-    # Accept suggestion and check that it persists in state
-    res_patch = c.patch(f'/api/findings/{finding_id}', json={'decision': 'accepted'})
-    assert res_patch.status_code == 200
-    assert res_patch.json()['decision'] == 'accepted'
+    # Test saved_pattern, not_relevant, review_later
+    res_saved = c.patch(f'/api/findings/{finding_id}', json={'decision': 'saved_pattern'})
+    assert res_saved.status_code == 200
+    assert res_saved.json()['decision'] == 'saved_pattern'
 
-    state_after = c.get('/api/state').json()
-    accepted_f = next(f for f in state_after['findings'] if f['id'] == finding_id)
-    assert accepted_f['decision'] == 'accepted'
+    res_not_rel = c.patch(f'/api/findings/{finding_id}', json={'decision': 'not_relevant'})
+    assert res_not_rel.status_code == 200
+    assert res_not_rel.json()['decision'] == 'not_relevant'
+
+    res_later = c.patch(f'/api/findings/{finding_id}', json={'decision': 'review_later'})
+    assert res_later.status_code == 200
+    assert res_later.json()['decision'] == 'review_later'
+
+    # Test report preview includes saved_pattern
+    c.patch(f'/api/findings/{finding_id}', json={'decision': 'saved_pattern'})
+    f_obj = next(f for f in c.get('/api/state').json()['findings'] if f['id'] == finding_id)
+    report_res = c.post('/api/report/preview', json={'evidence_ids': f_obj['evidence_ids']})
+    assert report_res.status_code == 200
+    assert 'User-reviewed patterns' in report_res.json()['text']
+    assert f_obj['summary'] in report_res.json()['text']
+
 
     # Test analyze fallback when Gemini raises 503
     monkeypatch.setenv('GEMINI_API_KEY', 'test-key')

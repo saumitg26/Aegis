@@ -38,6 +38,30 @@ const pageTitles: Record<string, [string, string]> = {
   Reports: ['Your story. Ready when you are.', 'Choose what to include, review it, and download a copy.']
 };
 
+function getRecordChipMeta(ev?: Evidence | null, fallbackId?: string) {
+  if (!ev) {
+    return { icon: '📋', label: fallbackId || 'Record' };
+  }
+  const name = (ev.filename || '').toLowerCase();
+  const src = (ev.source || '').toLowerCase();
+  if (name.includes('email') || name.endsWith('.eml') || name.endsWith('.msg') || src.includes('email')) {
+    return { icon: '✉️', label: 'Email record' };
+  }
+  if (name.includes('chat') || name.includes('slack') || name.includes('sms') || name.includes('discord') || name.includes('signal') || name.includes('imessage') || src.includes('chat')) {
+    return { icon: '💬', label: 'Chat record' };
+  }
+  if (name.includes('audio') || name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.m4a') || name.endsWith('.webm') || src.includes('audio')) {
+    return { icon: '🎙️', label: 'Voice / Audio record' };
+  }
+  if (name.includes('screenshot') || name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || src.includes('screenshot')) {
+    return { icon: '🖼️', label: 'Screenshot record' };
+  }
+  if (name.endsWith('.pdf') || name.endsWith('.docx') || name.endsWith('.txt')) {
+    return { icon: '📄', label: 'Document record' };
+  }
+  return { icon: '📋', label: ev.filename || fallbackId || 'Record' };
+}
+
 export default function App() {
   const [page, setPage] = useState('Home');
   const [data, setData] = useState<State>(emptyState);
@@ -629,7 +653,7 @@ export default function App() {
     }
   }
 
-  const pendingFindingsCount = data.findings.filter(f => f.decision === 'pending').length;
+  const pendingFindingsCount = data.findings.filter(f => f.decision === 'pending' || f.decision === 'review_later').length;
 
   if (!currentUser) {
     return (
@@ -755,12 +779,11 @@ export default function App() {
         </nav>
 
         <div className="sidebar-companion-card">
-          <span className="sidebar-companion-icon">🌱</span>
-          <div className="sidebar-companion-title">You're not alone.</div>
+          <span className="sidebar-companion-icon">🛡️</span>
+          <div className="sidebar-companion-title">Your private space</div>
           <div className="sidebar-companion-text">
-            AEGIS is here to support, believe, and empower you every step of the way.
+            Organize your records calmly and at your own pace. You decide what to document, review, and export.
           </div>
-          <span style={{ fontSize: 13 }}>💜</span>
         </div>
       </aside>
 
@@ -1005,9 +1028,9 @@ export default function App() {
                               <div className="insight-content" style={{ flex: 1 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
                                   <strong>{f.title}</strong>
-                                  {f.decision === 'accepted' ? (
+                                  {f.decision === 'saved_pattern' || f.decision === 'accepted' ? (
                                     <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: '#DCFCE7', color: '#15803d', border: '1px solid #BBF7D0', flexShrink: 0 }}>
-                                      ✓ In Report
+                                      ✓ Saved as pattern
                                     </span>
                                   ) : (
                                     <button
@@ -1018,15 +1041,15 @@ export default function App() {
                                         run(async () => {
                                           setData(prev => ({
                                             ...prev,
-                                            findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
+                                            findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'saved_pattern' } : item)
                                           }));
-                                          await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
+                                          await api('/findings/' + f.id, { decision: 'saved_pattern' }, 'PATCH');
                                           await refresh();
-                                          setNotice('Suggestion accepted! It will now be included in your exportable report.');
+                                          setNotice('Connection saved as a possible pattern for your records.');
                                         });
                                       }}
                                     >
-                                      Accept suggestion →
+                                      Save as pattern →
                                     </button>
                                   )}
                                 </div>
@@ -1642,167 +1665,292 @@ export default function App() {
                       </Button>
                     </div>
 
-                    {data.findings.map(f => (
-                      <article className="surface finding gsap-stagger" key={f.id} id={`finding-${f.id}`}>
-                        <div className="section-title">
-                          <span className="badge">
-                            {f.origin === 'Gemini' || f.origin === 'AI Companion'
-                              ? 'AI suggestion · needs review'
-                              : 'Explainable local signal'}
-                          </span>
-                          <span className={'review-state ' + f.decision}>
-                            {f.decision === 'accepted' ? 'User reviewed · suggestion' : f.decision}
-                          </span>
-                        </div>
-                        <h3>{f.title}</h3>
-                        <p>{f.summary}</p>
+                    {data.findings.map(f => {
+                      const isSaved = f.decision === 'saved_pattern' || f.decision === 'accepted';
+                      const isNotRelevant = f.decision === 'not_relevant' || f.decision === 'rejected';
+                      const isReviewLater = f.decision === 'review_later';
 
-                        {(f.direct_observations?.length || f.possible_interpretations?.length || (f.quotations && Object.keys(f.quotations).length > 0)) ? (
-                          <div className="structured-finding">
-                            {f.direct_observations && f.direct_observations.length > 0 && (
-                              <div className="finding-section">
-                                <strong>Direct Observations (Facts):</strong>
-                                <ul>
-                                  {f.direct_observations.map((obs, i) => (
-                                    <li key={i}>{obs}</li>
-                                  ))}
-                                </ul>
+                      const statusClass = isSaved
+                        ? 'status-saved'
+                        : isNotRelevant
+                        ? 'status-not-relevant'
+                        : isReviewLater
+                        ? 'status-review-later'
+                        : 'status-pending';
+
+                      const statusLabel = isSaved
+                        ? '✓ Saved as possible pattern'
+                        : isNotRelevant
+                        ? 'Marked not relevant'
+                        : isReviewLater
+                        ? 'Saved for later review'
+                        : 'Possible connection · Awaiting your review';
+
+                      return (
+                        <article className="finding-conversational-card gsap-stagger" key={f.id} id={`finding-${f.id}`}>
+                          {/* Header Eyebrow & Status Badge */}
+                          <div className="finding-header-row">
+                            <span className="finding-eyebrow">
+                              <Sparkles size={13} />
+                              AEGIS noticed something
+                            </span>
+                            <span className={`finding-status-pill ${statusClass}`}>
+                              {statusLabel}
+                            </span>
+                          </div>
+
+                          {/* Human-First Title & Summary */}
+                          <h3 className="finding-title">{f.title}</h3>
+                          <p className="finding-summary">{f.summary}</p>
+
+                          {/* Observations: "Here's what we noticed" */}
+                          {f.direct_observations && f.direct_observations.length > 0 && (
+                            <div className="what-we-noticed-section">
+                              <div className="what-we-noticed-title">Here’s what we noticed</div>
+                              <ul className="what-we-noticed-list">
+                                {f.direct_observations.map((obs, i) => (
+                                  <li key={i}>{obs}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Inferences / Interpretations (if any) */}
+                          {f.possible_interpretations && f.possible_interpretations.length > 0 && (
+                            <div className="what-this-might-mean-section">
+                              <div className="what-this-might-mean-title">What this might mean</div>
+                              <ul className="what-this-might-mean-list">
+                                {f.possible_interpretations.map((interp, i) => (
+                                  <li key={i}>{interp}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* Supporting records chips */}
+                          {f.evidence_ids && f.evidence_ids.length > 0 && (
+                            <div className="supporting-records-section">
+                              <span className="supporting-records-label">Supporting records:</span>
+                              <div className="supporting-records-chips">
+                                {f.evidence_ids.map(id => {
+                                  const ev = data.evidence.find(e => e.id === id);
+                                  const meta = getRecordChipMeta(ev, id);
+                                  return (
+                                    <button
+                                      key={id}
+                                      type="button"
+                                      className="supporting-record-chip"
+                                      title={`Click to inspect original record: ${ev?.filename || id}`}
+                                      onClick={() => setInspect(ev || null)}
+                                    >
+                                      <span>{meta.icon}</span>
+                                      <span>{meta.label}</span>
+                                      <ArrowUpRight size={12} style={{ color: '#94A3B8' }} />
+                                    </button>
+                                  );
+                                })}
                               </div>
-                            )}
+                            </div>
+                          )}
 
-                            {f.possible_interpretations && f.possible_interpretations.length > 0 && (
-                              <div className="finding-section">
-                                <strong>Possible Interpretations (Inferences):</strong>
-                                <ul>
-                                  {f.possible_interpretations.map((interp, i) => (
-                                    <li key={i}>{interp}</li>
-                                  ))}
-                                </ul>
+                          {/* Interactive Review Box */}
+                          <div className="finding-review-box">
+                            {isSaved ? (
+                              <div className="finding-decision-feedback saved">
+                                <span className="decision-feedback-text">
+                                  <CheckCheck size={16} />
+                                  Saved as possible pattern for your records
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn-change-decision"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    run(async () => {
+                                      setData(prev => ({
+                                        ...prev,
+                                        findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'pending' } : item)
+                                      }));
+                                      await api('/findings/' + f.id, { decision: 'pending' }, 'PATCH');
+                                      await refresh();
+                                      setNotice('Decision reset. You can review this finding again.');
+                                    })
+                                  }
+                                >
+                                  Change decision
+                                </button>
                               </div>
-                            )}
-
-                            {f.quotations && Object.keys(f.quotations).length > 0 && (
-                              <div className="finding-section">
-                                <strong>Verified Direct Quotations:</strong>
-                                <div className="quotations-list">
-                                  {Object.entries(f.quotations).map(([evId, quote]) => (
-                                    <div key={evId} className="quotation-item">
-                                      “{quote}”
-                                      <small>Source: {evId}</small>
-                                    </div>
-                                  ))}
+                            ) : isNotRelevant ? (
+                              <div className="finding-decision-feedback not-relevant">
+                                <span className="decision-feedback-text">
+                                  <X size={15} />
+                                  Marked not relevant to your experience
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn-change-decision"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    run(async () => {
+                                      setData(prev => ({
+                                        ...prev,
+                                        findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'pending' } : item)
+                                      }));
+                                      await api('/findings/' + f.id, { decision: 'pending' }, 'PATCH');
+                                      await refresh();
+                                      setNotice('Decision reset. You can review this finding again.');
+                                    })
+                                  }
+                                >
+                                  Change decision
+                                </button>
+                              </div>
+                            ) : isReviewLater ? (
+                              <div className="finding-decision-feedback">
+                                <span className="decision-feedback-text" style={{ color: '#92400E' }}>
+                                  <Clock size={15} />
+                                  Saved for later review
+                                </span>
+                                <button
+                                  type="button"
+                                  className="btn-change-decision"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    run(async () => {
+                                      setData(prev => ({
+                                        ...prev,
+                                        findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'pending' } : item)
+                                      }));
+                                      await api('/findings/' + f.id, { decision: 'pending' }, 'PATCH');
+                                      await refresh();
+                                      setNotice('Ready to review now.');
+                                    })
+                                  }
+                                >
+                                  Review now
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="finding-actions-cluster">
+                                <div className="finding-review-question">
+                                  Does this connection seem relevant to your experience?
                                 </div>
+                                <div className="finding-primary-actions">
+                                  <button
+                                    type="button"
+                                    className="btn-save-pattern"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      run(async () => {
+                                        setData(prev => ({
+                                          ...prev,
+                                          findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'saved_pattern' } : item)
+                                        }));
+                                        await api('/findings/' + f.id, { decision: 'saved_pattern' }, 'PATCH');
+                                        await refresh();
+                                        setNotice('Connection saved as a possible pattern for your records.');
+                                      })
+                                    }
+                                  >
+                                    <Check size={15} />
+                                    Save as possible pattern
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-not-relevant"
+                                    disabled={busy}
+                                    onClick={() =>
+                                      run(async () => {
+                                        setData(prev => ({
+                                          ...prev,
+                                          findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'not_relevant' } : item)
+                                        }));
+                                        await api('/findings/' + f.id, { decision: 'not_relevant' }, 'PATCH');
+                                        await refresh();
+                                        setNotice('Connection marked as not relevant.');
+                                      })
+                                    }
+                                  >
+                                    <X size={14} />
+                                    Not relevant
+                                  </button>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="btn-review-later"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    run(async () => {
+                                      setData(prev => ({
+                                        ...prev,
+                                        findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'review_later' } : item)
+                                      }));
+                                      await api('/findings/' + f.id, { decision: 'review_later' }, 'PATCH');
+                                      await refresh();
+                                      setNotice('Saved for later. You can review this finding at any time.');
+                                    })
+                                  }
+                                >
+                                  I’m not sure yet — review later
+                                </button>
                               </div>
                             )}
                           </div>
-                        ) : null}
 
-                        <div className="citations">
-                          {f.evidence_ids.map(id => (
-                            <button
-                              key={id}
-                              onClick={() =>
-                                setInspect(data.evidence.find(e => e.id === id) || null)
-                              }
-                            >
-                              <Files size={13} />
-                              {data.evidence.find(e => e.id === id)?.filename || id}
-                              <ArrowUpRight size={12} />
-                            </button>
-                          ))}
-                        </div>
-                        <p className="muted">{f.limitations}</p>
-                        <div className="button-row">
-                          {f.decision === 'accepted' ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#15803d', background: '#DCFCE7', border: '1px solid #BBF7D0', padding: '6px 14px', borderRadius: '999px', fontWeight: 700, fontSize: '13px' }}>
-                                <CheckCheck size={16} /> Accepted for report
-                              </span>
-                              <Button
-                                variant="ghost"
-                                disabled={busy}
-                                onClick={() =>
-                                  run(async () => {
-                                    setData(prev => ({
-                                      ...prev,
-                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'rejected' } : item)
-                                    }));
-                                    await api('/findings/' + f.id, { decision: 'rejected' }, 'PATCH');
-                                    await refresh();
-                                    setNotice('Suggestion removed from report.');
-                                  })
-                                }
-                              >
-                                <X size={14} /> Remove / Reject
-                              </Button>
+                          {/* Expandable Disclosure: Exact quotes and technical details */}
+                          <details className="finding-technical-details">
+                            <summary>
+                              <span>▾ View exact quotes and technical details</span>
+                              <ChevronDown size={14} className="disclosure-icon" />
+                            </summary>
+                            <div className="technical-details-content">
+                              {f.quotations && Object.keys(f.quotations).length > 0 && (
+                                <div className="tech-section">
+                                  <strong>Exact excerpts from your records:</strong>
+                                  <div className="quotations-list">
+                                    {Object.entries(f.quotations).map(([evId, quote]) => {
+                                      const ev = data.evidence.find(e => e.id === evId);
+                                      return (
+                                        <div key={evId} className="quotation-item">
+                                          “{quote}”
+                                          <small>Source record: {ev?.filename || evId}</small>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              <div className="tech-section">
+                                <strong>Cryptographic hashes & identifiers:</strong>
+                                <div className="tech-records-grid">
+                                  {f.evidence_ids.map(id => {
+                                    const ev = data.evidence.find(e => e.id === id);
+                                    return (
+                                      <div key={id} className="tech-record-meta">
+                                        <span>{ev?.filename || id}:</span>
+                                        <code>SHA-256: {ev?.sha256 ? `${ev.sha256.slice(0, 16)}...` : 'N/A'}</code>
+                                        <span className="muted">({ev?.imported_at ? new Date(ev.imported_at).toLocaleDateString() : 'Verified'})</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              <div className="tech-section">
+                                <strong>Forensic transparency & limitations:</strong>
+                                <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                                  {f.limitations || 'Findings are pattern suggestions based on exact matches or temporal clusters across submitted records.'}
+                                </p>
+                                <p className="muted" style={{ margin: '6px 0 0 0', fontSize: 11, fontStyle: 'italic' }}>
+                                  Note: Saving a pattern indicates that you find this connection relevant to organizing your personal narrative. It is not an independent technical verification of identity, authorship, or causation.
+                                </p>
+                              </div>
                             </div>
-                          ) : f.decision === 'rejected' ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b91c1c', background: '#FEE2E2', border: '1px solid #FECACA', padding: '6px 14px', borderRadius: '999px', fontWeight: 600, fontSize: '13px' }}>
-                                <X size={14} /> Rejected
-                              </span>
-                              <Button
-                                variant="outline"
-                                disabled={busy}
-                                onClick={() =>
-                                  run(async () => {
-                                    setData(prev => ({
-                                      ...prev,
-                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
-                                    }));
-                                    await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
-                                    await refresh();
-                                    setNotice('Suggestion re-accepted and added to report.');
-                                  })
-                                }
-                              >
-                                <Check size={14} /> Re-accept
-                              </Button>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                              <Button
-                                variant="outline"
-                                disabled={busy}
-                                style={{ borderColor: '#7C3AED', color: '#6D28D9', fontWeight: 600, background: '#EDE9FE' }}
-                                onClick={() =>
-                                  run(async () => {
-                                    setData(prev => ({
-                                      ...prev,
-                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'accepted' } : item)
-                                    }));
-                                    await api('/findings/' + f.id, { decision: 'accepted' }, 'PATCH');
-                                    await refresh();
-                                    setNotice('Suggestion accepted! It will now be included in your exportable report.');
-                                  })
-                                }
-                              >
-                                <Check size={16} />
-                                Accept suggestion
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                disabled={busy}
-                                onClick={() =>
-                                  run(async () => {
-                                    setData(prev => ({
-                                      ...prev,
-                                      findings: prev.findings.map(item => item.id === f.id ? { ...item, decision: 'rejected' } : item)
-                                    }));
-                                    await api('/findings/' + f.id, { decision: 'rejected' }, 'PATCH');
-                                    await refresh();
-                                    setNotice('Suggestion rejected.');
-                                  })
-                                }
-                              >
-                                <X size={16} />
-                                Reject
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      </article>
-                    ))}
+                          </details>
+                        </article>
+                      );
+                    })}
 
                     <details className="surface gsap-stagger">
                       <summary>

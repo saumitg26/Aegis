@@ -3165,3 +3165,377 @@ blockquote small {
   color: #0F172A;
   font-weight: 500;
 }
+
+/* Conversational AI Finding Review Card */
+.finding-conversational-card {
+  background: #ffffff;
+  border: 1px solid #E2E8F0;
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin: 20px 0;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.finding-conversational-card:hover {
+  border-color: #CBD5E1;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.07);
+}
+
+.finding-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.finding-eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #4338CA;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.finding-status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.finding-status-pill.status-pending {
+  background: #EDE9FE;
+  color: #5B21B6;
+  border: 1px solid #DDD6FE;
+}
+
+.finding-status-pill.status-saved {
+  background: #DCFCE7;
+  color: #15803d;
+  border: 1px solid #BBF7D0;
+}
+
+.finding-status-pill.status-not-relevant {
+  background: #F1F5F9;
+  color: #64748B;
+  border: 1px solid #E2E8F0;
+}
+
+.finding-status-pill.status-review-later {
+  background: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FDE68A;
+}
+
+.finding-title {
+  font-size: 19px;
+  font-weight: 700;
+  color: #0F172A;
+  margin: 0 0 8px 0;
+  line-height: 1.35;
+}
+
+.finding-summary {
+  font-size: 14px;
+  color: #334155;
+  line-height: 1.55;
+  margin: 0 0 16px 0;
+}
+
+/* Here's what we noticed & What this might mean */
+.what-we-noticed-section,
+.what-this-might-mean-section {
+  background: #F8FAFC;
+  border: 1px solid #E2E8F0;
+  border-radius: var(--radius-md);
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.what-we-noticed-title,
+.what-this-might-mean-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  margin: 0 0 10px 0;
+}
+
+.what-we-noticed-list,
+.what-this-might-mean-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  color: #1E293B;
+  line-height: 1.6;
+}
+
+.what-we-noticed-list li,
+.what-this-might-mean-list li {
+  margin-bottom: 6px;
+}
+.what-we-noticed-list li:last-child,
+.what-this-might-mean-list li:last-child {
+  margin-bottom: 0;
+}
+
+/* Supporting Records */
+.supporting-records-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  padding: 10px 0;
+  border-top: 1px solid #F1F5F9;
+  border-bottom: 1px solid #F1F5F9;
+}
+
+.supporting-records-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748B;
+}
+
+.supporting-records-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.supporting-record-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #FFFFFF;
+  border: 1px solid #CBD5E1;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.supporting-record-chip:hover {
+  background: #F1F5F9;
+  border-color: #94A3B8;
+  color: #0F172A;
+}
+
+/* Finding Review Controls */
+.finding-review-box {
+  background: #FAFAFA;
+  border: 1px solid #E2E8F0;
+  border-radius: var(--radius-md);
+  padding: 16px 20px;
+  margin: 18px 0;
+}
+
+.finding-review-question {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0F172A;
+  margin: 0 0 12px 0;
+}
+
+.finding-actions-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.finding-primary-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-save-pattern {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #4F46E5;
+  color: #ffffff;
+  border: 1px solid #4338CA;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.btn-save-pattern:hover {
+  background: #4338CA;
+}
+
+.btn-not-relevant {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  background: #F1F5F9;
+  color: #475569;
+  border: 1px solid #CBD5E1;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-not-relevant:hover {
+  background: #E2E8F0;
+  color: #1E293B;
+}
+
+.btn-review-later {
+  align-self: flex-start;
+  font-size: 12px;
+  color: #64748B;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.15s ease;
+}
+
+.btn-review-later:hover {
+  color: #0F172A;
+}
+
+.finding-decision-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.finding-decision-feedback.saved {
+  color: #15803d;
+}
+
+.finding-decision-feedback.not-relevant {
+  color: #64748B;
+}
+
+.decision-feedback-text {
+  font-size: 13px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-change-decision {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4338CA;
+  background: transparent;
+  border: 1px solid #CBD5E1;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-change-decision:hover {
+  background: #EDE9FE;
+  border-color: #A5B4FC;
+}
+
+/* Expandable Technical Transparency Details */
+.finding-technical-details {
+  margin-top: 16px;
+  border: 1px dashed #CBD5E1;
+  border-radius: var(--radius-md);
+  background: #F8FAFC;
+  overflow: hidden;
+}
+
+.finding-technical-details summary {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+  list-style: none;
+}
+
+.finding-technical-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.finding-technical-details summary:hover {
+  color: #0F172A;
+  background: #F1F5F9;
+}
+
+.finding-technical-details .disclosure-icon {
+  transition: transform 0.2s ease;
+}
+
+.finding-technical-details[open] .disclosure-icon {
+  transform: rotate(180deg);
+}
+
+.technical-details-content {
+  padding: 14px;
+  border-top: 1px solid #E2E8F0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tech-section strong {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #475569;
+  margin-bottom: 6px;
+}
+
+.tech-records-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tech-record-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #475569;
+  flex-wrap: wrap;
+}
+
+.tech-record-meta code {
+  font-family: monospace;
+  background: #E2E8F0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #0F172A;
+  font-weight: 600;
+}
+

@@ -3,7 +3,7 @@ export type Event={id:string;evidence_id:string;content:string;sender:string;tim
 export type Finding={id:string;title:string;summary:string;evidence_ids:string[];origin:string;decision:string;limitations:string;direct_observations?:string[];quotations?:Record<string,string>;possible_interpretations?:string[]};
 export type AuthUser={id:string;name:string;email:string;provider:string;provider_id:string;avatar_initials:string;role:string;vultr_region:string;vultr_region_name:string;vultr_instance_id:string;vultr_datacenter:string;encryption_standard:string;authenticated_at:string};
 export type State={case:{id:string;title:string;description:string}|null;evidence:Evidence[];events:Event[];incidents:{id:string;title:string;description:string;occurred_at:string|null;created_at:string}[];findings:Finding[]};
-function authHeaders(body?: unknown): HeadersInit {
+export function authHeaders(body?: unknown): HeadersInit {
   const headers: Record<string, string> = {};
   if (!(body instanceof FormData) && body) {
     headers['Content-Type'] = 'application/json';
@@ -42,4 +42,8 @@ export async function blobRequest(path:string,body:unknown){
     throw Error(e.detail || 'Request failed')
   }
   return r.blob()
+}
+
+export async function deleteIncident(id: string): Promise<{ deleted: string }> {
+  return api<{ deleted: string }>(`/incidents/${id}`, undefined, 'DELETE');
 }

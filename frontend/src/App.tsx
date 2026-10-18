@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
-import { api, blobRequest, type State, type Evidence, type AuthUser } from './api';
+import { api, blobRequest, deleteIncident, type State, type Evidence, type AuthUser } from './api';
 import { Button } from './components/ui/button';
 import { VoiceCapture } from './components/VoiceCapture';
 
@@ -162,12 +162,85 @@ export default function App() {
     try { return localStorage.getItem('aegis_vultr_region') || 'ewr'; } catch { return 'ewr'; }
   });
 
+  // Persistent Sign Up & Login state
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState(() => {
+    try { return localStorage.getItem('aegis_auth_email') || ''; } catch { return ''; }
+  });
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState(() => {
+    try { return localStorage.getItem('aegis_auth_name') || ''; } catch { return ''; }
+  });
+  const [authRegion, setAuthRegion] = useState('ewr');
+
   useEffect(() => {
     if (!profileOpen) return;
     const close = () => setProfileOpen(false);
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
   }, [profileOpen]);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    if (!authEmail.trim() || !authPassword) {
+      setError('Please provide your email and password.');
+      return;
+    }
+    setSsoLoading(true);
+    setError('');
+    try {
+      const res = await api<{ token: string; user: AuthUser }>('/auth/login', {
+        email: authEmail.trim(),
+        password: authPassword
+      });
+      localStorage.setItem('aegis_auth_token', res.token);
+      localStorage.setItem('aegis_user', JSON.stringify(res.user));
+      localStorage.setItem('aegis_auth_email', authEmail.trim());
+      localStorage.setItem('aegis_auth_name', res.user.name);
+      setCurrentUser(res.user);
+      await refresh();
+      setNotice(`Welcome back, ${res.user.name}!`);
+      setAuthPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Login failed. Check your email and password.');
+    } finally {
+      setSsoLoading(false);
+    }
+  }
+
+  async function handleRegister(e: React.FormEvent) {
+    e.preventDefault();
+    if (!authName.trim() || !authEmail.trim() || !authPassword) {
+      setError('Please fill in all fields to create your account.');
+      return;
+    }
+    if (authPassword.length < 6) {
+      setError('Password must be at least 6 characters.');
+      return;
+    }
+    setSsoLoading(true);
+    setError('');
+    try {
+      const res = await api<{ token: string; user: AuthUser }>('/auth/register', {
+        name: authName.trim(),
+        email: authEmail.trim(),
+        password: authPassword,
+        region: authRegion
+      });
+      localStorage.setItem('aegis_auth_token', res.token);
+      localStorage.setItem('aegis_user', JSON.stringify(res.user));
+      localStorage.setItem('aegis_auth_email', authEmail.trim());
+      localStorage.setItem('aegis_auth_name', authName.trim());
+      setCurrentUser(res.user);
+      await refresh();
+      setNotice(`Account created successfully! Welcome, ${res.user.name}.`);
+      setAuthPassword('');
+    } catch (err: any) {
+      setError(err.message || 'Registration failed.');
+    } finally {
+      setSsoLoading(false);
+    }
+  }
 
   async function handleSSOLogin(provider: 'vultr' | 'google' | 'saml' | 'demo', opts?: { email?: string; name?: string; region?: string }) {
     setSsoLoading(true);
@@ -610,24 +683,196 @@ export default function App() {
           {error && <div className="banner error" style={{ width: '100%', marginBottom: 16 }}>{error}</div>}
           {notice && <div className="banner success" style={{ width: '100%', marginBottom: 16 }}>{notice}</div>}
 
-          <p style={{ fontSize: 13, color: '#64748B', margin: '0 0 16px 0', lineHeight: 1.5 }}>
-            Your demo workspace supports uploads, voice, analysis and PDF reports. Isolated in temporary guest storage. Use fictional data only.
-          </p>
+          {/* Auth Mode Tabs */}
+          <div style={{ display: 'flex', background: '#F1F5F9', borderRadius: 10, padding: 3, marginBottom: 16 }}>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('login'); setError(''); }}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: 'none',
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: 'pointer',
+                background: authMode === 'login' ? '#FFFFFF' : 'transparent',
+                color: authMode === 'login' ? '#0F172A' : '#64748B',
+                boxShadow: authMode === 'login' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('register'); setError(''); }}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: 'none',
+                fontWeight: 600,
+                fontSize: 13,
+                cursor: 'pointer',
+                background: authMode === 'register' ? '#FFFFFF' : 'transparent',
+                color: authMode === 'register' ? '#0F172A' : '#64748B',
+                boxShadow: authMode === 'register' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none'
+              }}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {authMode === 'login' ? (
+            <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16, textAlign: 'left' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  autoFocus
+                  value={authEmail}
+                  onChange={e => setAuthEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Password
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={e => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                />
+              </div>
+              <button
+                type="submit"
+                className="sso-vultr-btn"
+                disabled={ssoLoading}
+                style={{ padding: '11px 16px', fontSize: 13, marginTop: 4 }}
+              >
+                <ShieldCheck size={16} />
+                <span>{ssoLoading ? 'Signing in…' : 'Sign In to My Case'}</span>
+              </button>
+              <div style={{ textAlign: 'center', fontSize: 12, color: '#64748B', marginTop: 4 }}>
+                Don't have an account?{' '}
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('register'); setError(''); }}
+                  style={{ background: 'none', border: 'none', color: '#4F46E5', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                >
+                  Create account
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 16, textAlign: 'left' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Your Name / Username
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={authName}
+                  onChange={e => setAuthName(e.target.value)}
+                  placeholder="e.g. Alex, Saumit"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={e => setAuthEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Password <small style={{ color: '#64748B' }}>(min 6 characters)</small>
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  value={authPassword}
+                  onChange={e => setAuthPassword(e.target.value)}
+                  placeholder="Create a password"
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Datacenter Enclave Region
+                </label>
+                <select
+                  value={authRegion}
+                  onChange={e => setAuthRegion(e.target.value)}
+                  style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13, background: '#ffffff' }}
+                >
+                  <option value="ewr">🇺🇸 New Jersey (EWR - High Frequency Enclave · 14ms)</option>
+                  <option value="ord">🇺🇸 Chicago (ORD - Central US Enclave · 22ms)</option>
+                  <option value="sjc">🇺🇸 Silicon Valley (SJC - West US Enclave · 38ms)</option>
+                  <option value="fra">🇩🇪 Frankfurt (FRA - EU Sovereign GDPR Enclave)</option>
+                  <option value="nrt">🇯🇵 Tokyo (NRT - Asia-Pacific Enclave)</option>
+                </select>
+              </div>
+              <button
+                type="submit"
+                className="sso-vultr-btn"
+                disabled={ssoLoading}
+                style={{ padding: '11px 16px', fontSize: 13, marginTop: 4 }}
+              >
+                <ShieldCheck size={16} />
+                <span>{ssoLoading ? 'Creating account…' : 'Create Account & Secure Workspace'}</span>
+              </button>
+              <div style={{ textAlign: 'center', fontSize: 12, color: '#64748B', marginTop: 4 }}>
+                Already have an account?{' '}
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('login'); setError(''); }}
+                  style={{ background: 'none', border: 'none', color: '#4F46E5', fontWeight: 600, cursor: 'pointer', padding: 0 }}
+                >
+                  Sign in
+                </button>
+              </div>
+            </form>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '8px 0 14px 0' }}>
+            <div style={{ flex: 1, height: 1, background: '#E2E8F0' }} />
+            <span style={{ fontSize: 10, color: '#94A3B8', fontWeight: 700, letterSpacing: '0.05em' }}>OR QUICK ACCESS</span>
+            <div style={{ flex: 1, height: 1, background: '#E2E8F0' }} />
+          </div>
 
           <div className="sso-buttons-stack" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <button
-              className="sso-vultr-btn"
+              type="button"
+              className="sso-secondary-btn"
               onClick={() => setVultrPromptOpen(true)}
               disabled={ssoLoading}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: '10px 14px', borderRadius: 10, border: '1px solid #BAE6FD', background: '#F0F9FF', color: '#0369A1', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}
             >
-              <ShieldCheck size={18} />
-              <span>{ssoLoading ? 'Authenticating with Vultr…' : 'Continue with Vultr SSO'}</span>
+              <ShieldCheck size={16} />
+              <span>Continue with Vultr SSO (Enclave Sandbox)</span>
             </button>
-            <div style={{ fontSize: 11, color: '#64748B', marginTop: -4, marginBottom: 4, textAlign: 'center' }}>
-              Isolated High-Frequency compute & cryptographic enclave (EWR)
-            </div>
 
             <button
+              type="button"
               className="sso-demo-btn"
               onClick={() => handleSSOLogin('demo')}
               disabled={ssoLoading}
@@ -956,7 +1201,161 @@ export default function App() {
             ) : (
               <>
                 {page === 'Home' ? (
-                  <section className="home-simple"><h1 ref={heading} tabIndex={-1}>One step at a time.</h1><p>Keep a clear record of what happened. You decide what comes next.</p><Button onClick={()=>setModal(true)}>Document an incident</Button><h2>{data.case?.title||'Your case'}</h2><p>{data.incidents.length} documented incidents · {data.evidence.length} records</p><h2>Recent records</h2>{data.evidence.length?data.evidence.slice(-3).reverse().map(e=><button className="record" key={e.id} onClick={()=>setInspect(e)}><FileText size={18}/><span>{e.filename}<small>{formatDate(e.original_time)}</small></span></button>):<p>No records yet. Add synthetic evidence to get started.</p>}</section>
+                  <section className="home-simple">
+                    <div className="home-hero">
+                      <h1 ref={heading} tabIndex={-1} style={{ fontSize: 28, fontWeight: 800, color: '#0F172A', marginBottom: 8 }}>
+                        One step at a time.
+                      </h1>
+                      <p style={{ fontSize: 15, color: '#475569', margin: '0 0 16px 0', lineHeight: 1.5 }}>
+                        Keep a clear record of what happened. You decide what comes next.
+                      </p>
+                      
+                      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
+                        <Button onClick={() => setModal(true)}>
+                          <Plus size={16} /> Document an incident
+                        </Button>
+                        <Button variant="outline" onClick={() => navigate('Voice companion')}>
+                          <AudioLines size={16} /> Voice Story Recording
+                        </Button>
+                        <Button variant="outline" onClick={() => navigate('Evidence')}>
+                          <Files size={16} /> Upload Evidence
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', background: '#F8FAFC', borderRadius: 12, border: '1px solid #E2E8F0', marginBottom: 24 }}>
+                      <div>
+                        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0F172A' }}>{data.case?.title || 'Your Case'}</h3>
+                        <div style={{ fontSize: 12, color: '#64748B', marginTop: 2 }}>{data.incidents.length} documented incidents · {data.evidence.length} records preserved</div>
+                      </div>
+                      <span style={{ fontSize: 11, fontWeight: 600, padding: '4px 8px', borderRadius: 6, background: '#EFF6FF', color: '#1D4ED8', border: '1px solid #BFDBFE' }}>
+                        {currentUser?.vultr_region_name || 'Enclave Workspace'}
+                      </span>
+                    </div>
+
+                    {/* Documented Incidents Section */}
+                    <div style={{ marginBottom: 32 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1E293B' }}>
+                          Documented Incidents ({data.incidents.length})
+                        </h2>
+                        <button
+                          type="button"
+                          style={{ fontSize: 13, color: '#4F46E5', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }}
+                          onClick={() => navigate('Timeline')}
+                        >
+                          View Timeline →
+                        </button>
+                      </div>
+
+                      {data.incidents.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                          {data.incidents.map(inc => (
+                            <div
+                              key={inc.id}
+                              style={{
+                                padding: '14px 16px',
+                                borderRadius: 12,
+                                background: '#FFFFFF',
+                                border: '1px solid #E2E8F0',
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 6
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ padding: '3px 8px', borderRadius: 6, background: '#F1F5F9', fontSize: 11, fontWeight: 600, color: '#475569' }}>
+                                    Incident
+                                  </span>
+                                  <span style={{ fontSize: 15, fontWeight: 700, color: '#0F172A' }}>{inc.title}</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <span style={{ fontSize: 12, color: '#64748B' }}>
+                                    {formatDate(inc.occurred_at || inc.created_at)}
+                                  </span>
+                                  <button
+                                    title="Delete incident"
+                                    type="button"
+                                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8', padding: 2 }}
+                                    onClick={async () => {
+                                      if (confirm(`Delete "${inc.title}"?`)) {
+                                        await deleteIncident(inc.id);
+                                        await refresh();
+                                        setNotice('Incident deleted.');
+                                      }
+                                    }}
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
+                                </div>
+                              </div>
+                              {inc.description && (
+                                <p style={{ margin: 0, fontSize: 13, color: '#334155', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                                  {inc.description}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ padding: '24px', textAlign: 'center', background: '#F8FAFC', borderRadius: 12, border: '1px dashed #CBD5E1' }}>
+                          <p style={{ margin: 0, fontSize: 13, color: '#64748B' }}>
+                            No incidents documented yet. Click <strong>Document an incident</strong> or use the <strong>Voice companion</strong> to describe what happened.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Recent Records & Evidence */}
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1E293B' }}>
+                          Recent Records & Evidence ({data.evidence.length})
+                        </h2>
+                        <button
+                          type="button"
+                          style={{ fontSize: 13, color: '#4F46E5', fontWeight: 600, background: 'none', border: 'none', cursor: 'pointer' }}
+                          onClick={() => navigate('Evidence')}
+                        >
+                          View All Records →
+                        </button>
+                      </div>
+
+                      {data.evidence.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {data.evidence.slice(-5).reverse().map(e => {
+                            const isAudio = e.filename.endsWith('.wav') || e.filename.endsWith('.mp3') || e.filename.endsWith('.m4a') || e.filename.endsWith('.webm');
+                            return (
+                              <button
+                                className="record"
+                                key={e.id}
+                                onClick={() => setInspect(e)}
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', padding: '12px 14px', borderRadius: 10, background: '#FFFFFF', border: '1px solid #E2E8F0', cursor: 'pointer', textAlign: 'left' }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  {isAudio ? <AudioLines size={18} style={{ color: '#0284C7' }} /> : <FileText size={18} style={{ color: '#6366F1' }} />}
+                                  <div>
+                                    <div style={{ fontSize: 14, fontWeight: 600, color: '#0F172A' }}>{e.filename}</div>
+                                    <div style={{ fontSize: 11, color: '#64748B' }}>{formatDate(e.original_time || e.imported_at)} · {e.source || 'File upload'}</div>
+                                  </div>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                  <span style={{ fontSize: 10, fontFamily: 'monospace', padding: '2px 6px', background: '#F1F5F9', borderRadius: 4, color: '#475569' }}>
+                                    SHA-256: {e.sha256.slice(0, 8)}…
+                                  </span>
+                                  <span style={{ fontSize: 12, color: '#94A3B8' }}>Inspect →</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p style={{ fontSize: 13, color: '#64748B' }}>No records yet. Add synthetic evidence to get started.</p>
+                      )}
+                    </div>
+                  </section>
                 ) : (
                   <>
                     <div className="eyebrow">YOUR SPACE / {page.toUpperCase()}</div>

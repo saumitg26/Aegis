@@ -348,3 +348,70 @@ def test_guest_expiry_and_ai_budget(env,monkeypatch):
     space.expires=0
     assert c.post('/api/incidents',json={'title':'Expired'}).status_code==401
     assert not space.directory.exists()
+
+def test_persistent_user_account_lifecycle(env, monkeypatch):
+    c, m = env
+    monkeypatch.setenv('PUBLIC_DEMO', 'true')
+    
+    # Validation failures
+    assert c.post('/api/auth/register', json={'name': 'Saumit G', 'email': 'invalid-email', 'password': 'pass'}).status_code == 422
+    assert c.post('/api/auth/register', json={'name': 'Saumit G', 'email': 'saumit@test.com', 'password': 'short'}).status_code == 422
+
+    # Successful registration
+    reg = c.post('/api/auth/register', json={'name': 'Saumit G', 'email': 'saumit@test.com', 'password': 'securepassword123', 'region': 'ord'})
+    assert reg.status_code == 200
+    user_data = reg.json()['user']
+    token = reg.json()['token']
+    assert user_data['name'] == 'Saumit G'
+    assert user_data['email'] == 'saumit@test.com'
+    assert user_data['avatar_initials'] == 'SG'
+    assert user_data['vultr_region'] == 'ord'
+    assert token is not None
+
+    # Duplicate registration rejected
+    assert c.post('/api/auth/register', json={'name': 'Saumit Duplicate', 'email': 'saumit@test.com', 'password': 'password123'}).status_code == 400
+
+    # Document an incident
+    inc = c.post('/api/incidents', json={'title': 'Persistent Discord harassment', 'description': 'Must survive server restart'}).json()
+    assert inc['title'] == 'Persistent Discord harassment'
+
+    # State check
+    st = c.get('/api/state').json()
+    assert any(i['id'] == inc['id'] for i in st['incidents'])
+
+    # Logout
+    assert c.post('/api/auth/logout').status_code == 200
+    assert c.get('/api/auth/me').json()['session_active'] is False
+
+    # Login with bad password fails
+    assert c.post('/api/auth/login', json={'email': 'saumit@test.com', 'password': 'wrongpassword'}).status_code == 401
+    assert c.post('/api/auth/login', json={'email': 'nonexistent@test.com', 'password': 'password'}).status_code == 401
+
+    # Login with correct password succeeds
+    login = c.post('/api/auth/login', json={'email': 'saumit@test.com', 'password': 'securepassword123'})
+    assert login.status_code == 200
+    assert login.json()['user']['email'] == 'saumit@test.com'
+    new_token = login.json()['token']
+
+    # Verify incident persisted across logout and login
+    st_after = c.get('/api/state').json()
+    assert any(i['id'] == inc['id'] for i in st_after['incidents'])
+
+    # Test server restart recovery: simulate process restart by clearing in-memory sessions dict
+    m.guests.sessions.clear()
+    # Now send request with Bearer token — backend must recover session from persistent disk!
+    recovered_me = c.get('/api/auth/me', headers={'Authorization': f'Bearer {new_token}'})
+    assert recovered_me.status_code == 200
+    assert recovered_me.json()['session_active'] is True
+    assert recovered_me.json()['user']['name'] == 'Saumit G'
+
+    recovered_state = c.get('/api/state', headers={'Authorization': f'Bearer {new_token}'})
+    assert recovered_state.status_code == 200
+    assert any(i['id'] == inc['id'] for i in recovered_state.json()['incidents'])
+
+    # Test incident deletion
+    del_res = c.delete(f'/api/incidents/{inc["id"]}', headers={'Authorization': f'Bearer {new_token}'})
+    assert del_res.status_code == 200
+    assert del_res.json()['deleted'] == inc['id']
+    st_deleted = c.get('/api/state', headers={'Authorization': f'Bearer {new_token}'}).json()
+    assert not any(i['id'] == inc['id'] for i in st_deleted['incidents'])

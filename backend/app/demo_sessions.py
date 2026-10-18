@@ -27,6 +27,7 @@ class Workspace:
     active: int = 0
     revoked: bool = False
     user: dict = None
+    is_persistent: bool = False
 
     @property
     def artifacts(self): return self.directory / 'artifacts'
@@ -34,14 +35,22 @@ class Workspace:
 def clean():
     now = time.monotonic()
     for token, space in list(sessions.items()):
+        if getattr(space, 'is_persistent', False):
+            continue
         if (space.expires <= now or space.revoked) and not space.active:
             space.engine.dispose()
             shutil.rmtree(space.directory, ignore_errors=True)
             del sessions[token]
 
 def lookup(token):
+    if not token:
+        return None
     space = sessions.get(token)
-    return space if space and not space.revoked and space.expires > time.monotonic() else None
+    if not space or space.revoked:
+        return None
+    if getattr(space, 'is_persistent', False):
+        return space
+    return space if space.expires > time.monotonic() else None
 
 def create(metadata):
     clean()
@@ -56,6 +65,23 @@ def create(metadata):
     engine = create_engine('sqlite:///'+str(directory/'demo.db'))
     metadata.create_all(engine)
     space = Workspace(token, directory, engine, now + TTL)
+    sessions[token] = space
+    return space
+
+def create_persistent(token: str, directory: Path, metadata, user: dict = None) -> Workspace:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / 'artifacts').mkdir(parents=True, exist_ok=True)
+    db_file = directory / 'aegis.db'
+    engine = create_engine(f"sqlite:///{db_file}")
+    metadata.create_all(engine)
+    space = Workspace(
+        token=token,
+        directory=directory,
+        engine=engine,
+        expires=float('inf'),
+        user=user,
+        is_persistent=True
+    )
     sessions[token] = space
     return space
 

@@ -1,6 +1,6 @@
 """Local synthetic-data demonstration. Run on loopback only; no production auth."""
 from __future__ import annotations
-import hashlib, io, json, os, re, uuid
+import hashlib, io, json, os, re, uuid, secrets
 from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesParser
@@ -22,16 +22,80 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 
 load_dotenv()
 Path('backend/data').mkdir(parents=True, exist_ok=True)
+WORKSPACES_ROOT = Path(os.getenv('WORKSPACES_DIR', 'backend/data/workspaces'))
+WORKSPACES_ROOT.mkdir(parents=True, exist_ok=True)
 ARTIFACT_DIR = Path(os.getenv('ARTIFACT_DIR', 'backend/data/artifacts'))
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 engine = create_engine(os.getenv('DATABASE_URL', 'sqlite:///./backend/data/aegis.db'))
+
 class Base(DeclarativeBase): pass
+
 class Record(Base):
     __tablename__ = 'records'
     id: Mapped[str] = mapped_column(String, primary_key=True)
     kind: Mapped[str] = mapped_column(String, index=True)
     data: Mapped[dict] = mapped_column(JSON)
+
+class UserAccount(Base):
+    __tablename__ = 'user_accounts'
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String)
+    salt: Mapped[str] = mapped_column(String)
+    name: Mapped[str] = mapped_column(String)
+    avatar_initials: Mapped[str] = mapped_column(String)
+    vultr_region: Mapped[str] = mapped_column(String, default='ewr')
+    vultr_region_name: Mapped[str] = mapped_column(String, default='New Jersey (EWR - High Frequency Enclave)')
+    vultr_instance_id: Mapped[str] = mapped_column(String)
+    role: Mapped[str] = mapped_column(String, default='Case Owner / Survivor')
+    created_at: Mapped[str] = mapped_column(String)
+    session_token: Mapped[str] = mapped_column(String, index=True, nullable=True)
+
 Base.metadata.create_all(engine)
+
+VULTR_REGIONS = {
+    'ewr': 'New Jersey (EWR - High Frequency Enclave)',
+    'ord': 'Chicago (ORD - Central US Enclave)',
+    'sjc': 'Silicon Valley (SJC - West US Enclave)',
+    'fra': 'Frankfurt (FRA - EU Sovereign Enclave)',
+    'nrt': 'Tokyo (NRT - Asia-Pacific Enclave)',
+}
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), 100_000).hex()
+
+def user_to_dict(acc: UserAccount) -> dict:
+    return {
+        'id': acc.id,
+        'name': acc.name,
+        'email': acc.email,
+        'provider': 'AEGIS Sovereign Enclave (Registered Account)',
+        'provider_id': 'vultr' if acc.vultr_instance_id else 'email',
+        'avatar_initials': acc.avatar_initials,
+        'role': acc.role,
+        'vultr_region': acc.vultr_region,
+        'vultr_region_name': acc.vultr_region_name,
+        'vultr_instance_id': acc.vultr_instance_id,
+        'vultr_datacenter': 'Vultr Core Zero-Trust Enclave',
+        'encryption_standard': 'AES-256-GCM / SHA-256 Byte Verification',
+        'authenticated_at': acc.created_at
+    }
+
+def get_or_restore_persistent_space(token: str | None) -> guests.Workspace | None:
+    if not token:
+        return None
+    space = guests.lookup(token)
+    if space:
+        return space
+    # Recover session from persistent user account across server restarts
+    with Session(engine) as s:
+        acc = s.scalar(select(UserAccount).where(UserAccount.session_token == token))
+        if not acc:
+            return None
+        u_dict = user_to_dict(acc)
+        user_dir = WORKSPACES_ROOT / acc.id
+        return guests.create_persistent(token=token, directory=user_dir, metadata=Base.metadata, user=u_dict)
+
 from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(title='AEGIS synthetic demo', version='0.1.0')
 origins = [o.strip() for o in os.getenv('CORS_ORIGINS', 'http://127.0.0.1:5173,http://localhost:5173').split(',') if o.strip()]
@@ -69,12 +133,23 @@ async def protect_public_demo(request: Request, call_next):
         return await call_next(request)
     path = request.url.path
     guests.clean()
-    space = guests.lookup(request_token(request))
+    space = get_or_restore_persistent_space(request_token(request))
     if request.method not in ['GET', 'HEAD', 'OPTIONS']:
         origin = request.headers.get('origin')
         if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
             return JSONResponse({'detail':'Cross-site requests are not allowed.'}, status_code=403)
-    public_paths = ['/api/health','/api/auth/me','/api/auth/sso','/api/auth/logout','/api/demo/audio','/api/auth/vultr/config','/api/auth/vultr/authorize','/api/auth/vultr/callback']
+    public_paths = [
+        '/api/health',
+        '/api/auth/me',
+        '/api/auth/sso',
+        '/api/auth/register',
+        '/api/auth/login',
+        '/api/auth/logout',
+        '/api/demo/audio',
+        '/api/auth/vultr/config',
+        '/api/auth/vultr/authorize',
+        '/api/auth/vultr/callback'
+    ]
     if not space and path not in public_paths:
         if request.method == 'GET' and path == '/api/state': return JSONResponse(demo_snapshot())
         return JSONResponse({'detail':'Open a demo workspace to continue. Your previous session may have expired.'}, status_code=401)
@@ -305,6 +380,16 @@ def add_incident(body: IncidentInput):
     with Session(request_engine()) as s:
         id=ident('IN'); data=dict(id=id,**body.model_dump(),created_at=now())
         s.add(Record(id=id,kind='incident',data=data)); s.commit(); return data
+
+@app.delete('/api/incidents/{id}')
+def delete_incident(id: str):
+    with Session(request_engine()) as s:
+        r = get(s, id)
+        if r.kind != 'incident':
+            raise HTTPException(404, 'Incident not found')
+        s.delete(r)
+        s.commit()
+    return {'deleted': id}
 @app.post('/api/evidence')
 async def upload(file: UploadFile=File(...)):
     raw=await file.read(10*1024*1024+1)
@@ -1070,24 +1155,141 @@ async def vultr_callback(request: Request, code: str = None, error: str = None):
     )
     return redirect_resp
 
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    email: str = Field(min_length=3, max_length=150)
+    password: str = Field(min_length=6, max_length=128)
+    region: Optional[str] = 'ewr'
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=150)
+    password: str = Field(min_length=1, max_length=128)
+
+@app.post('/api/auth/register')
+def auth_register(body: RegisterRequest, response: Response):
+    clean_email = body.email.strip().lower()
+    clean_name = body.name.strip()
+    if not clean_email or '@' not in clean_email:
+        raise HTTPException(422, 'Provide a valid email address.')
+    if len(body.password) < 6:
+        raise HTTPException(422, 'Password must be at least 6 characters.')
+    
+    with Session(engine) as s:
+        existing = s.scalar(select(UserAccount).where(UserAccount.email == clean_email))
+        if existing:
+            raise HTTPException(400, 'An account with this email already exists. Please log in.')
+        
+        salt = secrets.token_hex(16)
+        pwd_hash = hash_password(body.password, salt)
+        short_id = secrets.token_hex(6)
+        user_id = f"usr-{short_id}"
+        token = secrets.token_urlsafe(32)
+
+        parts = [p for p in clean_name.split() if p]
+        if len(parts) >= 2:
+            initials = (parts[0][0] + parts[1][0]).upper()
+        elif len(parts) == 1:
+            initials = parts[0][:2].upper() if len(parts[0]) > 1 else parts[0].upper()
+        else:
+            initials = "U"
+
+        clean_reg = (body.region or "ewr").lower().strip()
+        region_name = VULTR_REGIONS.get(clean_reg, f"{clean_reg.upper()} - High Frequency Enclave")
+
+        acc = UserAccount(
+            id=user_id,
+            email=clean_email,
+            password_hash=pwd_hash,
+            salt=salt,
+            name=clean_name,
+            avatar_initials=initials,
+            vultr_region=clean_reg,
+            vultr_region_name=region_name,
+            vultr_instance_id=f"vultr-inst-{short_id}",
+            role="Case Owner / Survivor",
+            created_at=now(),
+            session_token=token
+        )
+        s.add(acc)
+        s.commit()
+
+        user_dir = WORKSPACES_ROOT / user_id
+        u_dict = user_to_dict(acc)
+        space = guests.create_persistent(token=token, directory=user_dir, metadata=Base.metadata, user=u_dict)
+        
+        context = guests.current.set(space)
+        try:
+            seed()
+        finally:
+            guests.current.reset(context)
+
+        response.set_cookie(
+            guests.COOKIE,
+            token,
+            max_age=30 * 24 * 3600,
+            httponly=True,
+            secure=bool(os.getenv('RENDER')),
+            samesite='strict'
+        )
+        return {'token': token, 'user': u_dict}
+
+@app.post('/api/auth/login')
+def auth_login(body: LoginRequest, response: Response):
+    clean_email = body.email.strip().lower()
+    with Session(engine) as s:
+        acc = s.scalar(select(UserAccount).where(UserAccount.email == clean_email))
+        if not acc:
+            raise HTTPException(401, 'Invalid email or password.')
+        
+        pwd_hash = hash_password(body.password, acc.salt)
+        if pwd_hash != acc.password_hash:
+            raise HTTPException(401, 'Invalid email or password.')
+        
+        token = secrets.token_urlsafe(32)
+        acc.session_token = token
+        s.commit()
+
+        user_dir = WORKSPACES_ROOT / acc.id
+        u_dict = user_to_dict(acc)
+        space = guests.create_persistent(token=token, directory=user_dir, metadata=Base.metadata, user=u_dict)
+
+        response.set_cookie(
+            guests.COOKIE,
+            token,
+            max_age=30 * 24 * 3600,
+            httponly=True,
+            secure=bool(os.getenv('RENDER')),
+            samesite='strict'
+        )
+        return {'token': token, 'user': u_dict}
+
 @app.get('/api/auth/me')
 def auth_me(request: Request):
-    space = guests.current.get() or guests.lookup(request_token(request))
+    token = request_token(request)
+    space = guests.current.get() or get_or_restore_persistent_space(token)
     u = getattr(space, 'user', None) or (demo_user() if space else None)
-    is_vultr = bool(u and u.get('provider_id') == 'vultr')
+    is_authenticated = bool(u and u.get('provider_id') in ('vultr', 'email'))
     return {
-        'authenticated': is_vultr,
+        'authenticated': is_authenticated,
         'session_active': bool(space),
         'user': u,
-        'mode': 'vultr-sso' if is_vultr else 'guest-demo'
+        'mode': 'sovereign-enclave' if is_authenticated else 'guest-demo'
     }
 
 @app.post('/api/auth/logout')
 def auth_logout(request: Request, response: Response):
-    space = guests.current.get() or guests.lookup(request_token(request))
-    if space: space.revoked = True
+    token = request_token(request)
+    space = guests.current.get() or get_or_restore_persistent_space(token)
+    if space:
+        space.revoked = True
+    if token:
+        with Session(engine) as s:
+            acc = s.scalar(select(UserAccount).where(UserAccount.session_token == token))
+            if acc:
+                acc.session_token = None
+                s.commit()
     response.delete_cookie(guests.COOKIE)
-    return {'ok':True,'message':'Guest session closed.'}
+    return {'ok': True, 'message': 'Session closed.'}
 
 DIST_DIR = Path(__file__).resolve().parents[2] / 'dist'
 if DIST_DIR.exists():

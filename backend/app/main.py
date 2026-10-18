@@ -882,19 +882,36 @@ def report(body:Report):
 
 class SSORequest(BaseModel):
     provider: Literal['vultr','google','saml','demo'] = 'demo'
+    email: Optional[str] = None
+    name: Optional[str] = None
+    region: Optional[str] = None
 
-def vultr_user(token="", email="jamie@cloud.vultr.com", name="Jamie Doe"):
+VULTR_REGIONS = {
+    'ewr': 'New Jersey (EWR - High Frequency Enclave)',
+    'ord': 'Chicago (ORD - Central US Enclave)',
+    'sjc': 'Silicon Valley (SJC - West US Enclave)',
+    'fra': 'Frankfurt (FRA - EU Sovereign Enclave)',
+    'nrt': 'Tokyo (NRT - Asia-Pacific Enclave)',
+}
+
+def vultr_user(token="", email="jamie@cloud.vultr.com", name="Jamie Doe", region="ewr"):
     short_id = token[:8] if token else uuid.uuid4().hex[:8]
+    clean_name = (name or "Jamie Doe").strip()
+    clean_email = (email or "jamie@cloud.vultr.com").strip()
+    clean_reg = (region or "ewr").lower().strip()
+    region_name = VULTR_REGIONS.get(clean_reg, f"{clean_reg.upper()} - High Frequency Enclave")
+    parts = [p for p in clean_name.split() if p]
+    initials = "".join([p[0] for p in parts[:2]]).upper() if parts else "J"
     return {
         'id': f"vultr-usr-{short_id}",
-        'name': name,
-        'email': email,
+        'name': clean_name,
+        'email': clean_email,
         'provider': 'Vultr Cloud Authentication (OAuth 2.0)',
         'provider_id': 'vultr',
-        'avatar_initials': name[0] if name else 'J',
+        'avatar_initials': initials,
         'role': 'Case Owner / Survivor',
-        'vultr_region': 'ewr',
-        'vultr_region_name': 'New Jersey (EWR - High Frequency Enclave)',
+        'vultr_region': clean_reg,
+        'vultr_region_name': region_name,
         'vultr_instance_id': f"vultr-inst-{short_id[:6]}",
         'vultr_datacenter': 'Vultr Core Zero-Trust Enclave',
         'encryption_standard': 'AES-256-GCM / SHA-256 Byte Verification',
@@ -924,7 +941,12 @@ async def auth_sso(body: SSORequest, request: Request, response: Response):
         raise HTTPException(501, f"{body.provider.upper()} sign-in is not configured. Use Vultr SSO or Guest Demo.")
     
     space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE)) or guests.create(Base.metadata)
-    u = vultr_user(token=space.token) if body.provider == 'vultr' else demo_user()
+    u = vultr_user(
+        token=space.token,
+        email=body.email or "jamie@cloud.vultr.com",
+        name=body.name or "Jamie Doe",
+        region=body.region or "ewr"
+    ) if body.provider == 'vultr' else demo_user()
     space.user = u
     
     context = guests.current.set(space)

@@ -144,6 +144,10 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(false);
+  const [vultrPromptOpen, setVultrPromptOpen] = useState(false);
+  const [vultrEmail, setVultrEmail] = useState('jamie@cloud.vultr.com');
+  const [vultrName, setVultrName] = useState('Jamie Doe');
+  const [vultrRegion, setVultrRegion] = useState('ewr');
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -152,11 +156,16 @@ export default function App() {
     return () => window.removeEventListener('click', close);
   }, [profileOpen]);
 
-  async function handleSSOLogin(provider: 'vultr' | 'google' | 'saml' | 'demo') {
+  async function handleSSOLogin(provider: 'vultr' | 'google' | 'saml' | 'demo', opts?: { email?: string; name?: string; region?: string }) {
     setSsoLoading(true);
     setError('');
     try {
-      const res = await api<{ token: string | null; user: AuthUser }>('/auth/sso', { provider });
+      const res = await api<{ token: string | null; user: AuthUser }>('/auth/sso', {
+        provider,
+        email: opts?.email || (provider === 'vultr' ? vultrEmail : undefined),
+        name: opts?.name || (provider === 'vultr' ? vultrName : undefined),
+        region: opts?.region || (provider === 'vultr' ? vultrRegion : undefined)
+      });
       if (res.token) {
         localStorage.setItem('aegis_auth_token', res.token);
       } else {
@@ -164,9 +173,10 @@ export default function App() {
       }
       localStorage.setItem('aegis_user', JSON.stringify(res.user));
       setCurrentUser(res.user);
+      setVultrPromptOpen(false);
       await refresh();
       if (provider === 'vultr') {
-        setNotice('Signed in with Vultr Cloud SSO (EWR Enclave). Your session is cryptographically isolated.');
+        setNotice(`Signed in with Vultr Cloud SSO (${res.user.vultr_region.toUpperCase()}). Welcome, ${res.user.name}!`);
       } else {
         setNotice('Demo workspace ready. Your changes stay in this temporary browser session.');
       }
@@ -578,7 +588,7 @@ export default function App() {
           <div className="sso-buttons-stack" style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <button
               className="sso-vultr-btn"
-              onClick={() => handleSSOLogin('vultr')}
+              onClick={() => setVultrPromptOpen(true)}
               disabled={ssoLoading}
             >
               <ShieldCheck size={18} />
@@ -596,6 +606,133 @@ export default function App() {
               <span>Try Interactive Guest Demo</span>
             </button>
           </div>
+
+          {vultrPromptOpen && (
+            <div
+              className="modal-backdrop"
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15, 23, 42, 0.65)',
+                backdropFilter: 'blur(4px)',
+                display: 'grid',
+                placeItems: 'center',
+                zIndex: 9999,
+                padding: 16
+              }}
+              onClick={() => setVultrPromptOpen(false)}
+            >
+              <div
+                className="vultr-modal-card"
+                style={{
+                  background: '#ffffff',
+                  borderRadius: 20,
+                  maxWidth: 440,
+                  width: '100%',
+                  padding: '28px 24px',
+                  boxShadow: '0 25px 50px -12px rgba(2, 132, 199, 0.25)',
+                  border: '1px solid #BAE6FD',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 16,
+                  textAlign: 'left'
+                }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 12,
+                      background: 'linear-gradient(135deg, #0284C7 0%, #0369A1 100%)',
+                      display: 'grid',
+                      placeItems: 'center',
+                      color: '#ffffff',
+                      flexShrink: 0
+                    }}
+                  >
+                    <ShieldCheck size={24} />
+                  </div>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#0F172A' }}>Sign in with Vultr Cloud</h3>
+                    <p style={{ margin: '2px 0 0 0', fontSize: 12, color: '#64748B' }}>Authorize AEGIS Zero-Trust Forensic Enclave</p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                      Vultr Work Email / Username
+                    </label>
+                    <input
+                      type="email"
+                      value={vultrEmail}
+                      onChange={e => setVultrEmail(e.target.value)}
+                      placeholder="e.g. jamie@cloud.vultr.com"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                      Case Investigator / Survivor Name
+                    </label>
+                    <input
+                      type="text"
+                      value={vultrName}
+                      onChange={e => setVultrName(e.target.value)}
+                      placeholder="e.g. Jamie Doe"
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
+                    />
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                      Datacenter Enclave Region
+                    </label>
+                    <select
+                      value={vultrRegion}
+                      onChange={e => setVultrRegion(e.target.value)}
+                      style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13, background: '#ffffff' }}
+                    >
+                      <option value="ewr">🇺🇸 New Jersey (EWR - High Frequency Enclave · 14ms)</option>
+                      <option value="ord">🇺🇸 Chicago (ORD - Central US Enclave · 22ms)</option>
+                      <option value="sjc">🇺🇸 Silicon Valley (SJC - West US Enclave · 38ms)</option>
+                      <option value="fra">🇩🇪 Frankfurt (FRA - EU Sovereign GDPR Enclave)</option>
+                      <option value="nrt">🇯🇵 Tokyo (NRT - Asia-Pacific Enclave)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '10px 12px', fontSize: 11, color: '#0369A1', lineHeight: 1.5 }}>
+                  🛡️ <strong>Hardware Enclave Security:</strong> Provisions an isolated compute instance with AES-256-GCM hardware encryption and cryptographic SHA-256 evidence logging.
+                </div>
+
+                <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    className="sso-vultr-btn"
+                    style={{ flex: 1, padding: '11px 16px', fontSize: 13 }}
+                    onClick={() => handleSSOLogin('vultr', { email: vultrEmail, name: vultrName, region: vultrRegion })}
+                    disabled={ssoLoading}
+                  >
+                    <ShieldCheck size={16} />
+                    <span>{ssoLoading ? 'Authorizing…' : 'Authorize & Launch Enclave'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="sso-secondary-btn"
+                    style={{ width: 'auto', padding: '11px 16px', fontSize: 13 }}
+                    onClick={() => setVultrPromptOpen(false)}
+                    disabled={ssoLoading}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <details style={{ width: '100%', marginTop: 20, fontSize: 12, color: '#64748B', textAlign: 'left', border: '1px solid #E2E8F0', borderRadius: 10, padding: '8px 12px' }}>
             <summary style={{ cursor: 'pointer', fontWeight: 600, color: '#475569' }}>

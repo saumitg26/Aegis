@@ -147,6 +147,16 @@ def test_sso_authentication(env):
     assert user_u['avatar_initials'] == 'SA'
     assert 'saumit@cloud.vultr.com' in user_u['email']
 
+    # Test Bearer token header authorization
+    vultr_token = res_user_only.json()['token']
+    assert vultr_token is not None
+    # Client with cleared cookies can still authenticate via Bearer header
+    c.cookies.clear()
+    res_bearer_me = c.get('/api/auth/me', headers={'Authorization': f'Bearer {vultr_token}'})
+    assert res_bearer_me.status_code == 200
+    assert res_bearer_me.json()['authenticated'] is True
+    assert res_bearer_me.json()['user']['name'] == 'Saumit'
+
     # Test logout and demo SSO
     assert c.post('/api/auth/logout').json()['ok'] is True
     response = c.post('/api/auth/sso', json={'provider': 'demo'})

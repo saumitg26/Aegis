@@ -141,13 +141,26 @@ export default function App() {
   const [momentSavedToast, setMomentSavedToast] = useState('');
 
   // User Authentication & Vultr SSO state
-  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
+    try {
+      const stored = localStorage.getItem('aegis_user');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
   const [profileOpen, setProfileOpen] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(false);
   const [vultrPromptOpen, setVultrPromptOpen] = useState(false);
-  const [vultrName, setVultrName] = useState('');
-  const [vultrEmail, setVultrEmail] = useState('');
-  const [vultrRegion, setVultrRegion] = useState('ewr');
+  const [vultrName, setVultrName] = useState(() => {
+    try { return localStorage.getItem('aegis_vultr_name') || ''; } catch { return ''; }
+  });
+  const [vultrEmail, setVultrEmail] = useState(() => {
+    try { return localStorage.getItem('aegis_vultr_email') || ''; } catch { return ''; }
+  });
+  const [vultrRegion, setVultrRegion] = useState(() => {
+    try { return localStorage.getItem('aegis_vultr_region') || 'ewr'; } catch { return 'ewr'; }
+  });
 
   useEffect(() => {
     if (!profileOpen) return;
@@ -176,6 +189,11 @@ export default function App() {
         localStorage.removeItem('aegis_auth_token');
       }
       localStorage.setItem('aegis_user', JSON.stringify(res.user));
+      if (provider === 'vultr') {
+        if (targetName) localStorage.setItem('aegis_vultr_name', targetName);
+        if (targetEmail) localStorage.setItem('aegis_vultr_email', targetEmail);
+        localStorage.setItem('aegis_vultr_region', opts?.region || vultrRegion);
+      }
       setCurrentUser(res.user);
       setVultrPromptOpen(false);
       await refresh();
@@ -228,7 +246,14 @@ export default function App() {
 
     Promise.all([api<State>('/state'), api<typeof health>('/health'), api<{session_active:boolean;user:AuthUser|null}>('/auth/me')])
       .then(([state, h, session]) => {
-        if(session.session_active && session.user) setCurrentUser(session.user);
+        if (session.session_active && session.user) {
+          setCurrentUser(session.user);
+          localStorage.setItem('aegis_user', JSON.stringify(session.user));
+        } else if (!session.session_active) {
+          setCurrentUser(null);
+          localStorage.removeItem('aegis_user');
+          localStorage.removeItem('aegis_auth_token');
+        }
         setData(state);
         setHealth(h);
         setSelected(state.evidence.map(e => e.id));

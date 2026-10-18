@@ -55,13 +55,21 @@ def artifact_dir():
     if public_demo() and space is None: raise HTTPException(401, 'Open a demo workspace first.')
     return space.artifacts if space else ARTIFACT_DIR
 
+def request_token(request: Request) -> str | None:
+    token = request.cookies.get(guests.COOKIE)
+    if not token:
+        auth = request.headers.get('authorization', '')
+        if auth.startswith('Bearer '):
+            token = auth.split(' ', 1)[1].strip()
+    return token
+
 @app.middleware('http')
 async def protect_public_demo(request: Request, call_next):
     if not public_demo() or not request.url.path.startswith('/api/'):
         return await call_next(request)
     path = request.url.path
     guests.clean()
-    space = guests.lookup(request.cookies.get(guests.COOKIE))
+    space = guests.lookup(request_token(request))
     if request.method not in ['GET', 'HEAD', 'OPTIONS']:
         origin = request.headers.get('origin')
         if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
@@ -959,7 +967,7 @@ async def auth_sso(body: SSORequest, request: Request, response: Response):
     if body.provider not in ('vultr', 'demo'):
         raise HTTPException(501, f"{body.provider.upper()} sign-in is not configured. Use Vultr SSO or Guest Demo.")
     
-    space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE)) or guests.create(Base.metadata)
+    space = guests.current.get() or guests.lookup(request_token(request)) or guests.create(Base.metadata)
     u = vultr_user(
         token=space.token,
         email=body.email,
@@ -1045,7 +1053,7 @@ async def vultr_callback(request: Request, code: str = None, error: str = None):
         except Exception as e:
             print(f"[Vultr OAuth Callback Warning]: {e}", flush=True)
 
-    space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE)) or guests.create(Base.metadata)
+    space = guests.current.get() or guests.lookup(request_token(request)) or guests.create(Base.metadata)
     space.user = vultr_user(token=space.token, email=email, name=name)
     context = guests.current.set(space)
     try: seed()
@@ -1064,7 +1072,7 @@ async def vultr_callback(request: Request, code: str = None, error: str = None):
 
 @app.get('/api/auth/me')
 def auth_me(request: Request):
-    space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE))
+    space = guests.current.get() or guests.lookup(request_token(request))
     u = getattr(space, 'user', None) or (demo_user() if space else None)
     is_vultr = bool(u and u.get('provider_id') == 'vultr')
     return {
@@ -1076,7 +1084,7 @@ def auth_me(request: Request):
 
 @app.post('/api/auth/logout')
 def auth_logout(request: Request, response: Response):
-    space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE))
+    space = guests.current.get() or guests.lookup(request_token(request))
     if space: space.revoked = True
     response.delete_cookie(guests.COOKIE)
     return {'ok':True,'message':'Guest session closed.'}

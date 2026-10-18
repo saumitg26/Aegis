@@ -120,7 +120,7 @@ def test_sso_authentication(env):
     for provider in ['google', 'saml']:
         assert c.post('/api/auth/sso', json={'provider': provider}).status_code == 501
     
-    # Test Vultr SSO authentication
+    # Test Vultr SSO authentication default
     res_vultr = c.post('/api/auth/sso', json={'provider': 'vultr'})
     assert res_vultr.status_code == 200
     v_data = res_vultr.json()
@@ -130,6 +130,22 @@ def test_sso_authentication(env):
     res_auth = c.get('/api/auth/vultr/authorize', follow_redirects=False)
     assert res_auth.status_code == 307
     assert 'vultr-sandbox' in res_auth.headers.get('location', '')
+
+    # Test custom name and email in Vultr SSO
+    res_custom = c.post('/api/auth/sso', json={'provider': 'vultr', 'name': 'Sarah Connor', 'region': 'ord'})
+    assert res_custom.status_code == 200
+    custom_u = res_custom.json()['user']
+    assert custom_u['name'] == 'Sarah Connor'
+    assert custom_u['avatar_initials'] == 'SC'
+    assert custom_u['vultr_region'] == 'ord'
+
+    # Test custom username only (e.g. Saumit)
+    res_user_only = c.post('/api/auth/sso', json={'provider': 'vultr', 'name': 'Saumit'})
+    assert res_user_only.status_code == 200
+    user_u = res_user_only.json()['user']
+    assert user_u['name'] == 'Saumit'
+    assert user_u['avatar_initials'] == 'SA'
+    assert 'saumit@cloud.vultr.com' in user_u['email']
 
     # Test logout and demo SSO
     assert c.post('/api/auth/logout').json()['ok'] is True

@@ -145,8 +145,8 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [ssoLoading, setSsoLoading] = useState(false);
   const [vultrPromptOpen, setVultrPromptOpen] = useState(false);
-  const [vultrEmail, setVultrEmail] = useState('jamie@cloud.vultr.com');
-  const [vultrName, setVultrName] = useState('Jamie Doe');
+  const [vultrName, setVultrName] = useState('');
+  const [vultrEmail, setVultrEmail] = useState('');
   const [vultrRegion, setVultrRegion] = useState('ewr');
 
   useEffect(() => {
@@ -160,11 +160,15 @@ export default function App() {
     setSsoLoading(true);
     setError('');
     try {
+      const rawName = (opts?.name !== undefined ? opts.name : vultrName).trim();
+      const rawEmail = (opts?.email !== undefined ? opts.email : vultrEmail).trim();
+      const targetName = rawName || (rawEmail ? rawEmail.split('@')[0] : '');
+      const targetEmail = rawEmail || (rawName ? `${rawName.toLowerCase().replace(/\s+/g, '')}@cloud.vultr.com` : '');
       const res = await api<{ token: string | null; user: AuthUser }>('/auth/sso', {
         provider,
-        email: opts?.email || (provider === 'vultr' ? vultrEmail : undefined),
-        name: opts?.name || (provider === 'vultr' ? vultrName : undefined),
-        region: opts?.region || (provider === 'vultr' ? vultrRegion : undefined)
+        email: targetEmail || undefined,
+        name: targetName || undefined,
+        region: opts?.region || vultrRegion
       });
       if (res.token) {
         localStorage.setItem('aegis_auth_token', res.token);
@@ -660,29 +664,36 @@ export default function App() {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}>
+                <form
+                  onSubmit={e => {
+                    e.preventDefault();
+                    handleSSOLogin('vultr', { email: vultrEmail, name: vultrName, region: vultrRegion });
+                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 4 }}
+                >
                   <div>
                     <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                      Vultr Work Email / Username
+                      Username / Investigator Name
                     </label>
                     <input
-                      type="email"
-                      value={vultrEmail}
-                      onChange={e => setVultrEmail(e.target.value)}
-                      placeholder="e.g. jamie@cloud.vultr.com"
+                      type="text"
+                      autoFocus
+                      value={vultrName}
+                      onChange={e => setVultrName(e.target.value)}
+                      placeholder="Enter your username (e.g. Alex, Saumit)"
                       style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
                     />
                   </div>
 
                   <div>
                     <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                      Case Investigator / Survivor Name
+                      Vultr Work Email (Optional)
                     </label>
                     <input
-                      type="text"
-                      value={vultrName}
-                      onChange={e => setVultrName(e.target.value)}
-                      placeholder="e.g. Jamie Doe"
+                      type="email"
+                      value={vultrEmail}
+                      onChange={e => setVultrEmail(e.target.value)}
+                      placeholder="e.g. user@cloud.vultr.com (or leave empty)"
                       style={{ width: '100%', padding: '10px 12px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: 13 }}
                     />
                   </div>
@@ -703,33 +714,32 @@ export default function App() {
                       <option value="nrt">🇯🇵 Tokyo (NRT - Asia-Pacific Enclave)</option>
                     </select>
                   </div>
-                </div>
 
-                <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '10px 12px', fontSize: 11, color: '#0369A1', lineHeight: 1.5 }}>
-                  🛡️ <strong>Hardware Enclave Security:</strong> Provisions an isolated compute instance with AES-256-GCM hardware encryption and cryptographic SHA-256 evidence logging.
-                </div>
+                  <div style={{ background: '#F0F9FF', border: '1px solid #BAE6FD', borderRadius: 10, padding: '10px 12px', fontSize: 11, color: '#0369A1', lineHeight: 1.5 }}>
+                    🛡️ <strong>Hardware Enclave Security:</strong> Provisions an isolated compute instance with AES-256-GCM hardware encryption and cryptographic SHA-256 evidence logging.
+                  </div>
 
-                <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-                  <button
-                    type="button"
-                    className="sso-vultr-btn"
-                    style={{ flex: 1, padding: '11px 16px', fontSize: 13 }}
-                    onClick={() => handleSSOLogin('vultr', { email: vultrEmail, name: vultrName, region: vultrRegion })}
-                    disabled={ssoLoading}
-                  >
-                    <ShieldCheck size={16} />
-                    <span>{ssoLoading ? 'Authorizing…' : 'Authorize & Launch Enclave'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="sso-secondary-btn"
-                    style={{ width: 'auto', padding: '11px 16px', fontSize: 13 }}
-                    onClick={() => setVultrPromptOpen(false)}
-                    disabled={ssoLoading}
-                  >
-                    Cancel
-                  </button>
-                </div>
+                  <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+                    <button
+                      type="submit"
+                      className="sso-vultr-btn"
+                      style={{ flex: 1, padding: '11px 16px', fontSize: 13 }}
+                      disabled={ssoLoading}
+                    >
+                      <ShieldCheck size={16} />
+                      <span>{ssoLoading ? 'Authorizing…' : 'Authorize & Launch Enclave'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="sso-secondary-btn"
+                      style={{ width: 'auto', padding: '11px 16px', fontSize: 13 }}
+                      onClick={() => setVultrPromptOpen(false)}
+                      disabled={ssoLoading}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
@@ -831,15 +841,19 @@ export default function App() {
                 setProfileOpen(prev => !prev);
               }}
             >
-              <div className="user-avatar">{currentUser?.avatar_initials || 'J'}</div>
-              <span className="user-name">{currentUser?.provider_id === 'vultr' ? 'Jamie (Vultr)' : (currentUser?.name?.split(' ')[0] || 'Demo')}</span>
+              <div className="user-avatar">{currentUser?.avatar_initials || (currentUser?.name ? currentUser.name[0].toUpperCase() : 'U')}</div>
+              <span className="user-name">
+                {currentUser?.provider_id === 'vultr'
+                  ? `${(currentUser?.name || currentUser?.email || 'User').split(' ')[0]} (Vultr)`
+                  : (currentUser?.name?.split(' ')[0] || 'Demo')}
+              </span>
               <span style={{ fontSize: 10, color: '#94A3B8' }}>{profileOpen ? '▲' : '▼'}</span>
 
               {profileOpen && (
                 <div className="profile-popover" onClick={e => e.stopPropagation()}>
                   <div className="profile-popover-header">
                     <div className="profile-header-avatar">
-                      {currentUser?.avatar_initials || 'J'}
+                      {currentUser?.avatar_initials || (currentUser?.name ? currentUser.name[0].toUpperCase() : 'U')}
                     </div>
                     <div className="profile-header-meta">
                       <div className="profile-header-name">{currentUser?.name || 'Demo visitor'}</div>

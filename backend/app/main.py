@@ -894,14 +894,33 @@ VULTR_REGIONS = {
     'nrt': 'Tokyo (NRT - Asia-Pacific Enclave)',
 }
 
-def vultr_user(token="", email="jamie@cloud.vultr.com", name="Jamie Doe", region="ewr"):
+def vultr_user(token="", email=None, name=None, region="ewr"):
     short_id = token[:8] if token else uuid.uuid4().hex[:8]
-    clean_name = (name or "Jamie Doe").strip()
-    clean_email = (email or "jamie@cloud.vultr.com").strip()
+    raw_email = (email or "").strip()
+    raw_name = (name or "").strip()
+
+    if raw_name:
+        clean_name = raw_name
+    elif raw_email:
+        clean_name = raw_email.split('@')[0].capitalize()
+    else:
+        clean_name = "Jamie Doe"
+
+    if raw_email:
+        clean_email = raw_email if '@' in raw_email else f"{raw_email}@cloud.vultr.com"
+    else:
+        clean_email = f"{clean_name.lower().replace(' ', '')}@cloud.vultr.com"
+
     clean_reg = (region or "ewr").lower().strip()
     region_name = VULTR_REGIONS.get(clean_reg, f"{clean_reg.upper()} - High Frequency Enclave")
     parts = [p for p in clean_name.split() if p]
-    initials = "".join([p[0] for p in parts[:2]]).upper() if parts else "J"
+    if len(parts) >= 2:
+        initials = (parts[0][0] + parts[1][0]).upper()
+    elif len(parts) == 1:
+        initials = parts[0][:2].upper() if len(parts[0]) > 1 else parts[0].upper()
+    else:
+        initials = "V"
+
     return {
         'id': f"vultr-usr-{short_id}",
         'name': clean_name,
@@ -943,8 +962,8 @@ async def auth_sso(body: SSORequest, request: Request, response: Response):
     space = guests.current.get() or guests.lookup(request.cookies.get(guests.COOKIE)) or guests.create(Base.metadata)
     u = vultr_user(
         token=space.token,
-        email=body.email or "jamie@cloud.vultr.com",
-        name=body.name or "Jamie Doe",
+        email=body.email,
+        name=body.name,
         region=body.region or "ewr"
     ) if body.provider == 'vultr' else demo_user()
     space.user = u

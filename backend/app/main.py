@@ -328,7 +328,7 @@ def connections(events):
             result.append(dict(id=fid,title='A possible connection',summary=' '.join(reasons),evidence_ids=list(dict.fromkeys([a['evidence_id'],b['evidence_id']])),origin='Deterministic',decision='pending',limitations='This does not establish a shared identity, intent, or causation.'))
     return result
 
-@app.get('/api/health')
+@app.api_route('/api/health', methods=['GET', 'HEAD'])
 def health(): return dict(status='ok', synthetic_only=True, public_demo=public_demo(), gemini=bool(os.getenv('GEMINI_API_KEY')), voice=bool(os.getenv('ELEVENLABS_API_KEY')), tts=bool(os.getenv('ELEVENLABS_API_KEY')))
 def seed_initial_findings(s):
     arts = all_records(s, 'artifact')
@@ -1363,7 +1363,7 @@ if DIST_DIR.exists():
     from fastapi.staticfiles import StaticFiles
     if (DIST_DIR / 'assets').exists():
         app.mount('/assets', StaticFiles(directory=str(DIST_DIR / 'assets')), name='assets')
-    @app.get('/{full_path:path}')
+    @app.api_route('/{full_path:path}', methods=['GET', 'HEAD'])
     async def serve_spa(full_path: str):
         if full_path.startswith('api/'):
             raise HTTPException(404, 'API endpoint not found')

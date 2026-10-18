@@ -205,10 +205,8 @@ def seed_initial_findings(s):
 def state():
     with Session(engine) as s:
         cases=all_records(s,'case')
+        seed_initial_findings(s)
         findings=all_records(s,'finding')
-        if not [f for f in findings if f.get('origin') in ('Gemini', 'AI Companion')]:
-            seed_initial_findings(s)
-            findings=all_records(s,'finding')
         return dict(case=cases[0] if cases else None,evidence=all_records(s,'artifact'),events=sorted(all_records(s,'event'),key=lambda e:e['time'] or '9999'),incidents=all_records(s,'incident'),findings=findings)
 class CaseInput(BaseModel):
     title: str=Field(min_length=1,max_length=150)

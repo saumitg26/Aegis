@@ -1,122 +1,236 @@
+<div align="center">
+
 # AEGIS
+### Adaptive Evidence Graph & Incident System
 
-A calm workspace for documenting online incidents, preserving original records, reviewing possible connections, and preparing a local PDF. Built for **synthetic demonstrations only**.
+**Your story. Your evidence. Your control.**
 
-React 19 + TypeScript + Vite frontend; FastAPI + SQLAlchemy backend. Local SQLite requires no cloud account. Plus Jakarta Sans is self-hosted. The project was built from an empty repository, guided by the supplied AEGIS brief.
+*A calm, voice-enabled companion for documenting online harassment, understanding possible patterns, and preparing evidence-linked reports.*
 
-## Interactive hosted demo
+**Built for [Technica 2026](https://technica-2026.devpost.com/) · October 17–18, 2026**
 
-Render runs with `PUBLIC_DEMO=true`. Choose **Try the interactive demo** to create a separate temporary workspace with sample records. Upload fictional evidence, save incidents, review findings, transcribe with consent and export PDFs. Refreshing preserves the session. Ending the session revokes access; sessions expire after two hours or a process restart. Expired files are cleaned on subsequent traffic. Export what you need before leaving.
+[**Try the interactive demo**](https://aegis-hrt7.onrender.com/) · [**How it works**](#how-it-works) · [**Run locally**](#run-locally)
 
-Guest sessions use random HttpOnly, SameSite cookies and separate SQLite databases/artifact directories. They cannot access the shared local database or other visitors' records. This is a **single-process hackathon demo**, not durable production storage. Run one worker/instance; multiple instances need a shared session store and proper user authentication. Use fictional records only. Docker excludes local databases and secrets.
+</div>
 
-Bounds: 50 concurrent workspaces, 100 workspace creations per hour, a 25 MB storage threshold (a final upload can exceed this by at most the 10 MB file limit), and 10 assisted endpoint requests per session / 40 globally per hour. These limits are in-memory and reset on process restart. Endpoint requests count even if a provider is unavailable. Reports and ordinary editing do not consume AI allowance.
+> **Hackathon prototype — synthetic data only.** AEGIS is not a production evidence vault, emergency service, legal adviser, or secure channel for real harassment records. Please use fictional data and sample files when trying the hosted demo.
 
-Microphone recording stays local until an explicit transcription action and ElevenLabs consent. Google processing has separate consent. Provider errors never invent audio transcripts. Keys stay on the server.
+## The problem
 
-**Vultr sign-in is not connected.** The button explains the missing setup; it does not fake a Vultr identity. A registered OAuth application, limited scopes, client credentials, allowed callbacks and a verified authorization-code/PKCE flow are required. See [Vultr's integration guide](https://docs.vultr.com/platform/iam/oauth/access-tokens/how-to-integrate-a-third-party-app-with-vultr-oauth). The current Render deployment is not Vultr hosting.
+For someone experiencing online harassment, the hardest part of seeking support can be organizing what happened. A single experience may involve screenshots, emails, chat messages, different accounts, and dates scattered across platforms. The person affected should not need forensic expertise to make sense of those records.
+
+This challenge can be especially relevant to women, nonbinary people, and other underrepresented members of technical communities who face barriers to participating safely online.
+
+## Our solution
+
+**AEGIS makes digital documentation more understandable and accessible.** It brings user-provided records into one workspace, reconstructs a readable timeline, surfaces *possible* connections between records, and lets the user decide what deserves to be included in an export.
+
+Underneath the approachable interface is a Python forensic workflow, a Google Gemini explanation layer, and an optional ElevenLabs voice experience. AEGIS is designed to **support human judgment—not replace it**.
+
+### What makes AEGIS different?
+
+- **Evidence first:** store original uploaded bytes in the demo workspace, calculate a SHA-256 fingerprint, and keep source references attached to findings.
+- **Observations are not accusations:** shared URLs, overlapping text, or close timestamps can suggest a relationship; they do **not** establish identity, intent, or coordinated behavior.
+- **Human review:** suggested findings stay reviewable. Saving a possible pattern records the user's relevance decision, not independent verification.
+- **Voice as an alternative:** document an experience by speaking, listen to explanations, or review a recording—without requiring voice to use the app.
+- **Calm by design:** readable copy, clear next steps, muted teal-and-mint visuals, keyboard focus states, and reduced-motion support.
+
+## Features
+
+| Experience | What you can do |
+| --- | --- |
+| **Home** | Start with a guided overview and continue a case without navigating a security-style dashboard. |
+| **My Case** | Give an investigation context, record incidents, and see documented moments. |
+| **Evidence** | Import and inspect source records; view file metadata and fingerprints; search and filter uploads. |
+| **Timeline** | Explore incidents and parsed communication events in chronological order, including records with unknown dates. |
+| **Insights** | Review deterministic connections and, when configured, Gemini-assisted explanations linked to selected evidence. |
+| **Voice Companion** | Tell your story, explore case information through speech or text, and review audio recordings using optional ElevenLabs processing. |
+| **Reports** | Choose evidence, edit a summary, apply text redactions, preview, and download a PDF locally. |
+
+### Voice Companion: three ways to interact
+
+1. **Tell My Story:** capture a spoken account locally, review or edit the transcription, and turn it into an incident draft before saving.
+2. **Review Recordings:** work with imported audio and, with ElevenLabs enabled and user consent, explore a timestamped transcript with speaker-turn labels.
+3. **Explore My Case:** ask plain-English questions about selected evidence and optionally hear an answer spoken aloud.
+
+Microphone access is requested by the browser. Recording itself should not require sending audio to an external provider; ElevenLabs transcription and speech generation are separate consent-based actions. Speaker labels do not verify who a person is.
+
+### Digital forensics, without pretending certainty
+
+AEGIS's deterministic correlation engine compares records from different artifacts for:
+
+- **Matching URLs** across messages.
+- **Shared six-word phrases** in textual evidence.
+- **Close event timestamps** within a ten-minute window.
+
+Results contain evidence IDs and explanatory signals. Timing-only links are deliberately treated as potential coincidences; the synthetic dataset includes an unrelated event to illustrate that false-positive risk. Uploaded hashes help detect later changes to file bytes, **not** authenticate their original source or guarantee legal admissibility.
+
+## How it works
+
+~~~mermaid
+flowchart TD
+    A["User-provided evidence or narrated incident"] --> B["AEGIS case workspace"]
+    B --> C["Parse records + preserve original bytes and SHA-256"]
+    C --> D["Chronological events and deterministic connections"]
+    D --> E["Optional Gemini explanations with evidence IDs"]
+    E --> F["Human review: save, dismiss, or revisit"]
+    D --> F
+    F --> G["Select and redact records"]
+    G --> H["Preview and download PDF"]
+    V["Optional ElevenLabs speech-to-text / text-to-speech"] <--> B
+~~~
+
+**Gemini** assists with structured summaries and question answering using selected records. The backend checks referenced evidence IDs and exact quotation fields where supplied. AI-generated interpretations still require human review.
+
+**ElevenLabs** provides speech-to-text and text-to-speech integrations for the voice workflow. Availability depends on API configuration and provider access; the demo also provides clearly labeled non-AI or typed alternatives when applicable.
+
+## Technica 2026 challenge alignment
+
+AEGIS was designed for Technica's mission of empowering underrepresented genders in technology through inclusion, accessibility, safety, and user agency.
+
+| Challenge / prize | How AEGIS relates |
+| --- | --- |
+| **[Cipher Tech] Best Digital Forensics Hack** | Original artifact preservation, hashes, message parsing, timeline reconstruction, and explainable cross-artifact correlation. |
+| **[MLH] Best Use of Gemini API** | Structured, evidence-referenced incident explanations and case question answering. |
+| **[MLH] Best Use of ElevenLabs** | Guided voice documentation, transcription, audio review, and spoken explanations. |
+| **[Technica] A Sea for All: Best Accessibility Solution** | Optional voice interaction, keyboard-accessible workflows, readable language, and progressive disclosure. |
+| **[Technica] Fin-tastic Design: Best UI/UX Hack** | A supportive and uncluttered experience rather than an intimidating surveillance interface. |
+
+These are areas of relevance, **not claims of eligibility, submission to every category, or awards received**.
+
+## Tech stack
+
+| Layer | Tools |
+| --- | --- |
+| Frontend | React 19, TypeScript, Vite |
+| Interface | Plus Jakarta Sans, Lucide React, Radix UI, GSAP, custom responsive CSS |
+| Backend | Python, FastAPI, SQLAlchemy, Uvicorn |
+| Local/demo storage | SQLite plus filesystem artifact storage |
+| Forensics | Python standard-library email parsing, SHA-256 via `hashlib`, deterministic text/URL/time matching |
+| AI | Google Gemini API via the Google Gen AI Python SDK |
+| Voice | ElevenLabs speech-to-text (Scribe) and text-to-speech |
+| Reporting | ReportLab PDF generation |
+| Deployment | Docker on Render |
+
+The current application does **not** depend on Supabase, a vector database, or live integrations with social-media platforms.
+
+## Try the hosted demo
+
+**[Open AEGIS →](https://aegis-hrt7.onrender.com/)**
+
+The hosted Render configuration uses `PUBLIC_DEMO=true`. Choose **Try the interactive demo** to open a temporary guest workspace with sample content. You can practice documentation, inspect records, review suggested connections, explore the voice screen, and export a report.
+
+**Important demo restrictions:**
+
+- Use **fictional content only**. Do not upload actual private messages, recordings, credentials, or identifying details.
+- Guest workspaces use separate temporary databases and artifact directories with session cookies. They are **not** production accounts.
+- Temporary sessions expire after approximately **two hours** or a server restart; export anything you want to keep.
+- Demo use and assisted AI operations have rate and capacity limits.
+- Gemini and ElevenLabs actions require configured server-side keys, supported provider access, and explicit user consent.
+- Render Free's local filesystem is not durable across restarts or redeployments.
+- Experimental registration / OAuth-related features should not be treated as a security-certified identity system or a guarantee of encrypted permanent storage.
+
+This is a single-instance demonstration. It has not undergone a production security assessment.
+
+## Three-minute judge walkthrough
+
+1. **Document (0:00–0:35):** Open the sample case and add a fictional incident in **My Case** or through the guided voice interface.
+2. **Preserve (0:35–1:10):** Inspect an imported `.eml` or chat JSON in **Evidence**. Show its source details and SHA-256 fingerprint.
+3. **Connect (1:10–1:45):** Open **Timeline** and **Insights**. Compare a matching phrase/URL with a timing-only false positive; review why the engine suggested each connection.
+4. **Explain and listen (1:45–2:25):** If configured, run Gemini analysis on selected records and use ElevenLabs transcription or spoken playback. Make clear which portions depend on live external APIs.
+5. **Take control (2:25–3:00):** Save a relevant finding, omit an uncertain one, redact private text, preview the final report, and download the PDF.
+
+**The key moment:** AEGIS helps someone connect separate records while making the supporting evidence, uncertainty, and final user decision visible.
 
 ## Run locally
 
-Requires Node 20.19+ (Node 24 tested), Python 3.11+ (3.12 tested).
+Requirements: **Node.js 20.19+**, **Python 3.11+**.
 
-```sh
+~~~bash
+git clone https://github.com/saumitg26/Aegis.git
+cd Aegis
+
 npm ci
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.lock.txt
+
 cp .env.example .env
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
-```
+~~~
 
 In a second terminal, from the repository root:
 
-```sh
+~~~bash
 npm run dev
-```
+~~~
 
-Open http://127.0.0.1:5173. For local sample data, seed with:
+Open **http://127.0.0.1:5173**. The FastAPI OpenAPI page is available at **http://127.0.0.1:8000/docs**.
 
-```sh
+To initialize local synthetic sample data:
+
+~~~bash
 curl -X POST http://127.0.0.1:8000/api/seed
-```
+~~~
 
-Seeding is idempotent and never overwrites an existing case. Schema tables are created automatically; there is no migration framework yet. OpenAPI documentation: http://127.0.0.1:8000/docs.
+### Optional AI and voice setup
 
-## Working in this version
+Configure keys **on the backend only** in `.env`; never place them in `VITE_` variables or commit them.
 
-- Seven responsive screens, keyboard-visible focus, Radix dialogs with focus management, reduced-motion styles.
-- Create/edit a single case; save timestamped incidents and notes.
-- Import original bytes, calculate server-side SHA-256, inspect plain text and metadata, download originals, remove originals and derived events/findings.
-- Search evidence and filter its source. Timeline merges parsed events and incidents, preserving unknown dates and converting timezone-aware dates to UTC.
-- Deterministic cross-artifact connections: exact URLs, six-word overlap, and timestamps within ten minutes. Each suggestion lists its evidence and limitations. Up to 500 events per reconstruction.
-- Accept/reject findings. Reports include only accepted suggestions with all supporting records selected.
-- Select evidence, add an editable summary, redact exact phrases throughout report text, preview the same text used by PDF generation, download locally.
-- Real server-side Gemini structured-analysis and Q&A adapters. User-selected evidence, separate Google consent, bounded input, evidence-ID validation and exact-quotation validation. Unconfigured services are explicitly unavailable.
-- Local microphone capture and playback work without API keys in supported browsers. Stop, discard, and a 60-second cap are provided. Explicitly choose transcription with ElevenLabs after consent; edit the transcript before asking. ElevenLabs speech playback and the labeled fixed-checklist typed fallback remain available as configured.
+~~~dotenv
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+ELEVENLABS_STT_MODEL=scribe_v1
+ELEVENLABS_TTS_MODEL=eleven_multilingual_v2
+~~~
 
-## Supported imports
+Restart the backend after changing environment variables. Missing integrations should be disclosed in the UI rather than presented as successful real API operations.
 
-Maximum 10 MB per file. Text must be UTF-8.
+### Evidence import formats
 
-- `.eml`: headers and plain-text MIME body; HTML is never rendered. Attached files inside emails are not extracted.
-- `.json`: **only the documented normalized chat schema**, not arbitrary Discord/Slack export formats. See `fixtures/community-chat.json`:
-  ```json
-  {"platform":"Community forum","messages":[{"author":"demo","timestamp":"2026-10-15T14:35:00Z","content":"Synthetic message"}]}
-  ```
-  Up to 500 messages; timezone-less or invalid dates remain unknown.
-- `.txt`: text event with unknown original time.
-- `.png`, `.jpg`, `.jpeg`: signature-checked original bytes and metadata. No OCR, image preview, malware scan, or forensic authenticity claim.
+- `.eml` — email headers and plain-text MIME body.
+- `.json` — normalized messages in the project's documented schema (see `fixtures/community-chat.json`), not arbitrary Discord/Slack exports.
+- `.txt` — plain-text notes (no automatically inferred original timestamp).
+- `.png`, `.jpg`, `.jpeg` — stored original image bytes and metadata; no OCR or authenticity assessment.
+- Audio formats supported by the current importer, including `.wav`, for optional recording review.
 
-The synthetic fixture includes an unrelated reminder near the other messages to demonstrate a timing false positive. Stable random evidence IDs are stored with their originals; hashes do not certify authenticity or legal admissibility.
+Individual imports are limited to **10 MB**. Text files must be UTF-8; JSON is limited to the supported schema.
 
-## Provider setup
+## Tests and project docs
 
-Set backend-only variables in `.env` and restart the API:
-
-- `GEMINI_API_KEY`, `GEMINI_MODEL` (default `gemini-2.5-flash`; change to a model available to your account).
-- `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID`; optional STT/TTS model IDs.
-
-Never use `VITE_` variables for secrets. No real keys were supplied or committed. Adapters are covered with mocked transport responses; **live provider execution, microphone capture, and audio playback were not verified**. Missing-key and no-consent paths are tested. Providers may retain supplied content. Each operation requires explicit consent; browser microphone permission is a separate user action.
-
-Gemini citation/quotation checks detect unknown IDs and non-matching quotation fields. They do not establish factual truth or guarantee that every free-form assertion is grounded; all output still needs human review. Keyless Q&A is deliberately a fixed checklist, not simulated AI.
-
-## Verification
-
-```sh
+~~~bash
 npm run build
 npm test
-.venv/bin/python -m pytest backend/tests -q
-```
+python -m pytest backend/tests -q
+~~~
 
-See `docs/QA.md` for actual checks. See `docs/DESIGN.md` for design references and the precise role of shadcn, Impeccable, Apple Design, and Chrome DevTools MCP. `.vscode/mcp.json` provides optional shadcn and Chrome DevTools servers; those MCPs were not invoked in this implementation session.
+Read [the QA record](docs/QA.md) for previously documented checks and [design notes](docs/DESIGN.md) for implementation decisions. Passing tests does not prove production readiness or validate live third-party API availability.
 
-## Boundaries and next work
+## Responsible design and limitations
 
-This is a functional local MVP, **not the entire production system described in the master brief**. Bind to loopback only. No authentication, encryption-at-rest, tenant isolation, request rate limiting, malware scanning, retention scheduler, or security review exists. Do not deploy this API publicly or upload real harassment evidence.
+AEGIS is an **educational hackathon prototype**. It does not determine who controls an account, prove malicious intent, diagnose someone, or provide legal conclusions.
 
-Current deliberate simplifications:
+- **Human oversight:** model-generated observations and interpretations remain distinguishable from source records. Users choose which possible patterns to keep or omit.
+- **Evidence integrity:** fingerprints are checks on stored bytes, not certificates of authenticity.
+- **Privacy and consent:** voice/AI features may send selected content to external providers if the user opts in. Provider retention policies are outside AEGIS's control.
+- **Storage:** the hosted demo is temporary. Persistent real-user storage, security auditing, robust authentication and authorization, retention/deletion guarantees, and sensitive-data handling need additional engineering.
+- **Scope:** this is not a crisis-response service and should not replace professional, legal, or emergency support.
+- **Honest failure states:** if an API fails, no generated or sample text should be presented as a transcript of a real recording.
 
-- One case stored as typed JSON records in SQLAlchemy, with application-managed deletion. No normalized multi-case relational model or database foreign-key cascades yet.
-- An accessible connection list, not an interactive node graph. Six-word overlap is a simple signal, not a statistically validated distinctiveness metric.
-- Incidents can be added but not edited/deleted in the UI; evidence labels are not editable. Timeline has no date/source filters yet.
-- Reports include selected evidence events and a user-entered summary. Manually entered incidents must be summarized in the personal-summary field; individual incident selection is not implemented. Redaction is exact-text replacement, not field-level structured anonymization. Full-document editing is not implemented.
-- PDF uses ReportLab's standard font; extended Unicode/script coverage needs a bundled Unicode font before use beyond the English synthetic fixtures.
-- Voice shows the latest exchange, not a persistent conversation log. No server-side audio-duration verification; upload-byte limits are enforced.
-- Errors/timeouts are handled; provider quotas are surfaced as service failures, not granular quota diagnostics. Supabase and live provider flows remain unverified.
+## Development and acknowledgements
 
-`DATABASE_URL` can target PostgreSQL with an appropriate SQLAlchemy driver, for example `postgresql+psycopg://...` after installing `psycopg[binary]`. Supabase requires credentials, migrations, access controls and deployment validation; it is not preconfigured. Original bytes remain in `ARTIFACT_DIR` on the backend filesystem.
+Built as a **Technica 2026 hackathon project**, with a focus on human-centered safety, accessible voice interaction, and transparent digital forensics.
 
-## Three-minute demonstration
+Development involved AI-assisted planning and coding support; Gemini and ElevenLabs are also integrated as application services. Generated code and model output require developer validation and human review. Thanks to the open-source maintainers of React, FastAPI, Radix UI, GSAP, Lucide, and the other dependencies that make this prototype possible.
 
-1. **0:00–0:45:** Open Home, document a synthetic incident, then inspect the email original and its SHA-256 in Evidence.
-2. **0:45–1:30:** Show UTC Timeline. In Insights inspect the shared URL/phrase, accept that suggestion, and reject the unrelated reminder's timing-only link. Explain that neither identifies a person.
-3. **1:30–2:00:** With a configured Gemini key, select records and consent to analysis; review the cited suggestions. Without a key, show the explicit unavailable state and the deterministic local analysis.
-4. **2:00–2:30:** With ElevenLabs configured, consent, record a short question, stop, edit transcript and confirm. Optionally consent to Gemini for the answer; explicitly prepare and play speech. Without keys, show the labeled typed-checklist fallback and state that live voice has not been verified.
-5. **2:30–3:00:** Select report records, add context, redact an exact phrase, preview, and download the PDF. Nothing is shared automatically.
+---
 
-## Recording status
+<div align="center">
 
-`Record locally` requests browser microphone permission and captures a clip on this device. `Stop recording` releases the microphone and provides local playback. No audio is uploaded by recording or stopping. `Discard recording`, navigation away, and unmount cancel capture. Local clips are ephemeral and are not added to the evidence store.
+**AEGIS — You are heard. Your information is organized. You are in control.**
 
-To transcribe, configure `ELEVENLABS_API_KEY`, restart the backend, reload the app, opt in to ElevenLabs processing, and choose `Transcribe with ElevenLabs`. Set `ELEVENLABS_VOICE_ID` for spoken replies, and `GEMINI_API_KEY` for AI answers. Live microphone hardware and provider round trips remain unverified; six frontend tests cover capture lifecycle using a simulated MediaRecorder, alongside eight backend tests. No key is required for the local recording UI or typed checklist.
+[Launch the demo](https://aegis-hrt7.onrender.com/) · [Source code](https://github.com/saumitg26/Aegis)
+
+</div>

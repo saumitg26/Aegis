@@ -233,4 +233,6 @@ Development involved AI-assisted planning and coding support; Gemini and ElevenL
 
 [Launch the demo](https://aegis-hrt7.onrender.com/) · [Source code](https://github.com/saumitg26/Aegis)
 
+**For the Technica 2026 Hackathon · By Saumit Guduguntla**
+
 </div>

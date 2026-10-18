@@ -755,9 +755,10 @@ def story_extract(body: StoryExtractInput):
     text = body.story_text.strip()
     key = os.getenv('GEMINI_API_KEY')
     draft = None
-    if key and genai:
+    if key:
         try:
-            client = genai.Client(api_key=key)
+            from google import genai
+            client = genai.Client(api_key=key, http_options={'timeout': 30000})
             prompt = (
                 "You are an empathetic, forensically grounded documentation companion for survivors of harassment. "
                 "From the following spoken account, extract structured incident fields. "

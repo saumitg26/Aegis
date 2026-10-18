@@ -129,38 +129,43 @@ def request_token(request: Request) -> str | None:
 
 @app.middleware('http')
 async def protect_public_demo(request: Request, call_next):
-    if not public_demo() or not request.url.path.startswith('/api/'):
+    if not request.url.path.startswith('/api/'):
         return await call_next(request)
     path = request.url.path
     guests.clean()
-    space = get_or_restore_persistent_space(request_token(request))
-    if request.method not in ['GET', 'HEAD', 'OPTIONS']:
-        origin = request.headers.get('origin')
-        if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
-            return JSONResponse({'detail':'Cross-site requests are not allowed.'}, status_code=403)
-    public_paths = [
-        '/api/health',
-        '/api/auth/me',
-        '/api/auth/sso',
-        '/api/auth/register',
-        '/api/auth/login',
-        '/api/auth/logout',
-        '/api/demo/audio',
-        '/api/auth/vultr/config',
-        '/api/auth/vultr/authorize',
-        '/api/auth/vultr/callback'
-    ]
-    if not space and path not in public_paths:
-        if request.method == 'GET' and path == '/api/state': return JSONResponse(demo_snapshot())
-        return JSONResponse({'detail':'Open a demo workspace to continue. Your previous session may have expired.'}, status_code=401)
+    raw_tok = request_token(request)
+    space = get_or_restore_persistent_space(raw_tok)
+    if not space and raw_tok:
+        space = guests.lookup(raw_tok)
+    if public_demo():
+        if request.method not in ['GET', 'HEAD', 'OPTIONS']:
+            origin = request.headers.get('origin')
+            if request.headers.get('sec-fetch-site') == 'cross-site' or (origin and origin.rstrip('/') != str(request.base_url).rstrip('/')):
+                return JSONResponse({'detail':'Cross-site requests are not allowed.'}, status_code=403)
+        public_paths = [
+            '/api/health',
+            '/api/auth/me',
+            '/api/auth/sso',
+            '/api/auth/register',
+            '/api/auth/login',
+            '/api/auth/logout',
+            '/api/demo/audio',
+            '/api/auth/vultr/config',
+            '/api/auth/vultr/authorize',
+            '/api/auth/vultr/callback'
+        ]
+        if not space and path not in public_paths:
+            if request.method == 'GET' and path == '/api/state': return JSONResponse(demo_snapshot())
+            return JSONResponse({'detail':'Open a demo workspace to continue. Your previous session may have expired.'}, status_code=401)
     token = guests.current.set(space)
     if space: space.active += 1
     try:
-        if space and request.method == 'POST' and path in ['/api/analyze','/api/ask','/api/voice/transcribe','/api/voice/speak','/api/voice/analyze-audio','/api/voice/story-extract']:
-            guests.charge_provider(space)
-        if space and request.method in ['POST','PUT','PATCH']:
-            if sum(p.stat().st_size for p in space.directory.rglob('*') if p.is_file()) > 25*1024*1024:
-                raise HTTPException(413, 'Demo workspace storage limit reached. Remove unused records.')
+        if space and not getattr(space, 'is_persistent', False):
+            if request.method == 'POST' and path in ['/api/analyze','/api/ask','/api/voice/transcribe','/api/voice/speak','/api/voice/analyze-audio','/api/voice/story-extract']:
+                guests.charge_provider(space)
+            if request.method in ['POST','PUT','PATCH']:
+                if sum(p.stat().st_size for p in space.directory.rglob('*') if p.is_file()) > 25*1024*1024:
+                    raise HTTPException(413, 'Demo workspace storage limit reached. Remove unused records.')
         response = await call_next(request)
         response.headers['Cache-Control'] = 'no-store'
         return response

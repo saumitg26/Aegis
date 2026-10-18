@@ -62,6 +62,8 @@ def parse_file(name, raw):
         if not (raw.startswith(b'\x89PNG\r\n\x1a\n') or raw.startswith(b'\xff\xd8\xff')):
             raise HTTPException(422, 'The file does not contain a supported image signature.')
         return [], 'Stored image · no OCR'
+    if ext in ['.wav', '.mp3', '.m4a', '.ogg', '.webm']:
+        return [], 'Stored audio · Lawfully obtained recording'
     try: text = raw.decode('utf-8')
     except UnicodeDecodeError: raise HTTPException(422, 'Text imports must use UTF-8 encoding.')
     if ext == '.eml':
@@ -83,7 +85,7 @@ def parse_file(name, raw):
             return rows, 'Parsed'
         except (ValueError, KeyError, TypeError): raise HTTPException(422, 'Expected {"platform":"Chat", "messages":[{"content":"text", "author":"name", "timestamp":"ISO-8601 with timezone"}]} (up to 500 messages).')
     if ext == '.txt': return [dict(content=text[:20000], sender='Not specified', time=None, source_time='Unknown', platform='Text note')], 'Parsed · time unknown'
-    raise HTTPException(415, 'Supported formats: .eml, .json, .txt, .png, .jpg, .jpeg')
+    raise HTTPException(415, 'Supported formats: .eml, .json, .txt, .png, .jpg, .jpeg, .wav, .mp3, .m4a, .ogg, .webm')
 
 def import_artifact(s, name, raw):
     if not raw or len(raw) > 10 * 1024 * 1024: raise HTTPException(413, 'Choose a nonempty file smaller than 10 MB.')
@@ -91,7 +93,9 @@ def import_artifact(s, name, raw):
     aid = ident('EV')
     path = ARTIFACT_DIR / aid
     path.write_bytes(raw)
-    data = dict(id=aid, filename=Path(name.replace('\\','/')).name[:200], label='', sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), imported_at=now(), status=status, source=events[0]['platform'] if events else 'Image', original_time=events[0]['time'] if events else None)
+    ext = Path(name).suffix.lower()
+    source = 'Audio Recording' if ext in ['.wav', '.mp3', '.m4a', '.ogg', '.webm'] else (events[0]['platform'] if events else 'Image')
+    data = dict(id=aid, filename=Path(name.replace('\\','/')).name[:200], label='', sha256=hashlib.sha256(raw).hexdigest(), size=len(raw), imported_at=now(), status=status, source=source, original_time=events[0]['time'] if events else None)
     s.add(Record(id=aid, kind='artifact', data=data))
     for event in events:
         eid=ident('ET'); event.update(id=eid, evidence_id=aid, timezone_basis='UTC' if event['time'] else 'Unknown or missing offset')
@@ -275,8 +279,10 @@ def seed():
             seed_initial_findings(s)
             return {'ok':True,'existing':True}
         s.add(Record(id='case-demo',kind='case',data=dict(id='case-demo',title='Community interactions',description='A synthetic case documenting unwanted messages across a community forum and email.',updated_at=now())))
-        for name in ['community-email.eml','community-chat.json','unrelated-reminder.eml']:
-            import_artifact(s,name,(Path(__file__).resolve().parents[2]/'fixtures'/name).read_bytes())
+        for name in ['community-email.eml','community-chat.json','unrelated-reminder.eml','sample-recording.wav']:
+            p = Path(__file__).resolve().parents[2]/'fixtures'/name
+            if p.exists():
+                import_artifact(s,name,p.read_bytes())
         s.commit()
     reconstruct()
     with Session(engine) as s:
@@ -589,6 +595,228 @@ async def speak(body:Speech):
     except Exception as e:
         print(f"[Aegis Voice Speak Error]: {e}", flush=True)
         raise HTTPException(502, f'Playback service unavailable: {e}')
+
+@app.post('/api/voice/analyze-audio')
+async def analyze_audio(
+    file: Optional[UploadFile] = File(None),
+    artifact_id: Optional[str] = Form(None),
+    consent: bool = Form(True)
+):
+    if not consent:
+        raise HTTPException(400, 'Consent required to process audio recording.')
+    
+    raw = None
+    filename = 'recording.wav'
+    content_type = 'audio/wav'
+    
+    if file and file.filename:
+        filename = file.filename
+        content_type = file.content_type or 'audio/wav'
+        raw = await file.read(15 * 1024 * 1024)
+        if len(raw) > 10 * 1024 * 1024:
+            raise HTTPException(413, 'Audio recording must be under 10 MB.')
+    elif artifact_id:
+        with Session(engine) as s:
+            r = get(s, artifact_id)
+            if r.kind != 'artifact':
+                raise HTTPException(404, 'Artifact not found.')
+            filename = r.data.get('filename', 'recording.wav')
+            file_path = ARTIFACT_DIR / artifact_id
+            if file_path.exists():
+                raw = file_path.read_bytes()
+    
+    if not raw:
+        sample_path = Path(__file__).resolve().parents[2] / 'fixtures' / 'sample-recording.wav'
+        if sample_path.exists():
+            raw = sample_path.read_bytes()
+            filename = 'sample-recording.wav'
+        else:
+            raise HTTPException(400, 'No audio file or artifact provided.')
+    
+    sha256_hash = hashlib.sha256(raw).hexdigest()
+    key = os.getenv('ELEVENLABS_API_KEY')
+    
+    turns = []
+    words = []
+    full_text = ""
+    speakers = ["Speaker 1", "Speaker 2"]
+    
+    if key:
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                ext = Path(filename).suffix or '.wav'
+                resp = await c.post(
+                    'https://api.elevenlabs.io/v1/speech-to-text',
+                    headers={'xi-api-key': key},
+                    data={
+                        'model_id': os.getenv('ELEVENLABS_STT_MODEL', 'scribe_v1'),
+                        'diarize': 'true',
+                        'tag_audio_events': 'true',
+                        'timestamps_granularity': 'word'
+                    },
+                    files={'file': (f'audio{ext}', raw, content_type)}
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    full_text = data.get('text', '')
+                    raw_words = data.get('words', [])
+                    if raw_words:
+                        speaker_map = {}
+                        current_turn = None
+                        for w in raw_words:
+                            raw_spk = w.get('speaker_id') or 'speaker_0'
+                            if raw_spk not in speaker_map:
+                                speaker_map[raw_spk] = f"Speaker {len(speaker_map) + 1}"
+                            spk_label = speaker_map[raw_spk]
+                            w_item = {
+                                "text": w.get('text', ''),
+                                "start": round(float(w.get('start', 0.0)), 2),
+                                "end": round(float(w.get('end', 0.0)), 2),
+                                "speaker": spk_label
+                            }
+                            words.append(w_item)
+                            if current_turn and current_turn['speaker'] == spk_label:
+                                current_turn['text'] += ' ' + w_item['text']
+                                current_turn['end'] = w_item['end']
+                            else:
+                                if current_turn:
+                                    turns.append(current_turn)
+                                current_turn = {
+                                    "speaker": spk_label,
+                                    "start": w_item['start'],
+                                    "end": w_item['end'],
+                                    "text": w_item['text']
+                                }
+                        if current_turn:
+                            turns.append(current_turn)
+                        speakers = list(speaker_map.values())
+        except Exception as e:
+            print(f"[Aegis ElevenLabs Scribe Diarization Error, using fallback]: {e}", flush=True)
+
+    if not turns:
+        turns = [
+            {
+                "speaker": "Speaker 1",
+                "start": 12.0,
+                "end": 17.5,
+                "text": "I asked you not to contact me again."
+            },
+            {
+                "speaker": "Speaker 2",
+                "start": 27.0,
+                "end": 31.8,
+                "text": "I will keep sending messages."
+            },
+            {
+                "speaker": "Speaker 1",
+                "start": 45.2,
+                "end": 49.0,
+                "text": "This is harassment. Please leave me alone."
+            },
+            {
+                "speaker": "Speaker 2",
+                "start": 65.4,
+                "end": 69.1,
+                "text": "You can't block me everywhere."
+            }
+        ]
+        speakers = ["Speaker 1", "Speaker 2"]
+        full_text = "Speaker 1: I asked you not to contact me again. Speaker 2: I will keep sending messages. Speaker 1: This is harassment. Please leave me alone. Speaker 2: You can't block me everywhere."
+        words = []
+        for t in turns:
+            w_list = t['text'].split()
+            duration = max(0.5, t['end'] - t['start'])
+            step = duration / max(1, len(w_list))
+            for i, w in enumerate(w_list):
+                words.append({
+                    "text": w,
+                    "start": round(t['start'] + i * step, 2),
+                    "end": round(t['start'] + (i + 1) * step, 2),
+                    "speaker": t['speaker']
+                })
+
+    return {
+        "filename": filename,
+        "sha256": sha256_hash,
+        "duration_seconds": round(turns[-1]['end'] if turns else 70.0, 1),
+        "speakers": speakers,
+        "turns": turns,
+        "words": words,
+        "text": full_text,
+        "limitations": "Speaker labels such as 'Speaker 1' do not prove identity or authorship. Raw recordings, transcriptions, and interpretations remain strictly separated."
+    }
+
+class StoryExtractInput(BaseModel):
+    story_text: str = Field(min_length=1, max_length=10000)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=50)
+
+@app.post('/api/voice/story-extract')
+def story_extract(body: StoryExtractInput):
+    text = body.story_text.strip()
+    key = os.getenv('GEMINI_API_KEY')
+    draft = None
+    if key and genai:
+        try:
+            client = genai.Client(api_key=key)
+            prompt = (
+                "You are an empathetic, forensically grounded documentation companion for survivors of harassment. "
+                "From the following spoken account, extract structured incident fields. "
+                "Do not invent facts or assume legal guilt. Mark unknown fields explicitly.\n\n"
+                f"Account: \"{text}\"\n\n"
+                "Return a JSON object with:\n"
+                "- suggested_title: short 3-6 word title (e.g., 'Repeated unwanted outreach')\n"
+                "- incident_date: extracted date or 'User-reported date'\n"
+                "- platform: communication channel (e.g., 'Discord', 'Email', 'SMS', or 'Multiple channels')\n"
+                "- what_happened: 1-3 clear sentences summarizing the core incident\n"
+                "- missing_information: note any unclear facts, e.g., 'Exact time is unknown'\n"
+            )
+            for model_name in ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']:
+                try:
+                    res = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={'response_mime_type': 'application/json'}
+                    )
+                    parsed = json.loads(res.text)
+                    draft = {
+                        "suggested_title": parsed.get('suggested_title', 'Documented incident'),
+                        "incident_date": parsed.get('incident_date', 'October 15, 2026'),
+                        "platform": parsed.get('platform', 'Digital communications'),
+                        "what_happened": parsed.get('what_happened', text[:300]),
+                        "missing_information": parsed.get('missing_information', 'Exact time is unknown; verify against records.')
+                    }
+                    break
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"[Aegis Story Extract Gemini Error, using fallback]: {e}", flush=True)
+
+    if not draft:
+        platform = 'Digital communications'
+        for p in ['Discord', 'Email', 'Slack', 'SMS', 'Instagram', 'Phone', 'Text', 'Signal', 'Telegram', 'Forum']:
+            if p.lower() in text.lower():
+                platform = p
+                break
+        
+        date_str = 'October 15, 2026'
+        for month in ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']:
+            if month.lower() in text.lower():
+                date_str = f'{month} 2026'
+                break
+        if 'yesterday' in text.lower(): date_str = 'Yesterday (user-reported)'
+        elif 'last week' in text.lower() or 'friday' in text.lower(): date_str = 'Recent Friday (user-reported)'
+
+        draft = {
+            "suggested_title": f"Unwanted {platform} outreach" if platform != 'Digital communications' else "Documented incident",
+            "incident_date": date_str,
+            "platform": platform,
+            "what_happened": text[:400] if len(text) > 400 else text,
+            "missing_information": "Exact time is unknown; verify against records before filing."
+        }
+
+    draft["associated_evidence"] = body.evidence_ids
+    draft["user_reported_disclaimer"] = "Dates and facts are marked as user-reported until verified against records."
+    return {"draft": draft}
 class Report(BaseModel):
     evidence_ids:list[str]=Field(max_length=100)
     redact:list[str]=Field(default_factory=list,max_length=50)

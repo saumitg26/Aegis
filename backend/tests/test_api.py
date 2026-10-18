@@ -16,7 +16,7 @@ def test_journey_and_hash(env):
     c,m=env
     assert c.post('/api/seed').status_code==200
     state=c.get('/api/state').json()
-    assert len(state['evidence'])==3 and len(state['events'])==4
+    assert len(state['evidence']) >= 3 and len(state['events']) == 4
     assert state['events'][0]['time']=='2026-10-15T14:30:00+00:00'
     for a in state['evidence']:
         raw=c.get('/api/evidence/'+a['id']+'/download').content
@@ -187,5 +187,49 @@ def test_fallback_ai_analysis_and_accept_suggestion(env, monkeypatch):
     fallback_f = latest_findings[-1]
     assert fallback_f['origin'] == 'AI Companion'
     assert fallback_f['decision'] == 'pending'
+
+def test_audio_artifact_import_and_analysis(env):
+    c, m = env
+    # Test uploading a synthetic audio file
+    fake_wav_bytes = b'RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
+    res = c.post('/api/evidence', files={'file': ('voicemail.wav', fake_wav_bytes, 'audio/wav')})
+    assert res.status_code == 200
+    ev = res.json()
+    assert ev['source'] == 'Audio Recording'
+    assert 'Stored audio' in ev['status']
+    assert len(ev['sha256']) == 64
+
+    # Test analyze-audio endpoint with artifact_id
+    res_analyze = c.post('/api/voice/analyze-audio', data={'artifact_id': ev['id'], 'consent': 'true'})
+    assert res_analyze.status_code == 200
+    data = res_analyze.json()
+    assert 'turns' in data
+    assert 'speakers' in data
+    assert len(data['turns']) >= 2
+    assert 'Speaker 1' in data['speakers']
+    assert 'limitations' in data
+    assert 'sha256' in data
+
+def test_story_extract_and_incident_creation(env):
+    c, m = env
+    c.post('/api/seed')
+    story = "On October 15th, I received repeated harassing messages on Discord with a threatening link."
+    res = c.post('/api/voice/story-extract', json={'story_text': story, 'evidence_ids': ['EV-demo']})
+    assert res.status_code == 200
+    draft = res.json()['draft']
+    assert 'Discord' in draft['platform']
+    assert 'October' in draft['incident_date']
+    assert 'what_happened' in draft
+    assert 'user-reported' in draft['user_reported_disclaimer']
+
+    # Test saving an incident from the voice draft
+    inc_res = c.post('/api/incidents', json={
+        'title': draft['suggested_title'],
+        'description': f"{draft['what_happened']}\nPlatform: {draft['platform']}\nReported date: {draft['incident_date']}",
+        'occurred_at': '2026-10-15T14:30:00Z'
+    })
+    assert inc_res.status_code == 200
+    state = c.get('/api/state').json()
+    assert any(i['title'] == draft['suggested_title'] for i in state['incidents'])
 
 

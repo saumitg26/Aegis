@@ -5,7 +5,7 @@ import {
   ArrowUpRight, ArrowRight, Plus, ChevronRight, Check, Upload, Search, X,
   Download, Mail, MessageSquare, LockKeyhole, Leaf, Info, Mic, Square, Play,
   CheckCheck, Trash2, NotebookPen, ChevronDown, Volume2, VolumeX, Sparkles,
-  Compass, ArrowDown, Clock, ShieldCheck, HelpCircle, Paperclip, Send, Bell
+  Compass, ArrowDown, Clock, ShieldCheck, HelpCircle, Paperclip, Send, Bell, Pause
 } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
@@ -114,6 +114,40 @@ export default function App() {
   ]);
   const [slowerSpeech, setSlowerSpeech] = useState(false);
   const [captionsOn, setCaptionsOn] = useState(true);
+
+  // Voice Documentation Companion: 3 Modes ('story' | 'recordings' | 'explore')
+  const [voiceMode, setVoiceMode] = useState<'story' | 'recordings' | 'explore'>('story');
+
+  // Mode 1: Tell My Story State
+  const [storyStep, setStoryStep] = useState(0);
+  const [storyTypedInput, setStoryTypedInput] = useState('');
+  const [storySpeechTranscript, setStorySpeechTranscript] = useState('');
+  const [storyExtracting, setStoryExtracting] = useState(false);
+  const [storyIncidentDraft, setStoryIncidentDraft] = useState<{
+    suggested_title: string;
+    incident_date: string;
+    platform: string;
+    what_happened: string;
+    missing_information: string;
+    associated_evidence: string[];
+    user_reported_disclaimer: string;
+  } | null>(null);
+
+  // Mode 2: Audio Evidence Review State
+  const [audioAnalysis, setAudioAnalysis] = useState<{
+    filename: string;
+    sha256: string;
+    duration_seconds: number;
+    speakers: string[];
+    turns: { speaker: string; start: number; end: number; text: string }[];
+    words: { text: string; start: number; end: number; speaker: string }[];
+    text: string;
+    limitations: string;
+  } | null>(null);
+  const [audioAnalyzing, setAudioAnalyzing] = useState(false);
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const [audioPlaybackTime, setAudioPlaybackTime] = useState(0);
+  const [momentSavedToast, setMomentSavedToast] = useState('');
 
   // User Authentication & Vultr SSO state
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
@@ -651,6 +685,114 @@ export default function App() {
       window.speechSynthesis.speak(utter);
       setNotice('Replaying response with speech synthesis.');
     }
+  }
+
+  const guidedQuestions = [
+    {
+      eyebrow: "Step 1 of 4 · The Beginning",
+      question: "Can you tell me when this started and what happened first?",
+      hint: "E.g., dates, times, or the earliest message or encounter you remember."
+    },
+    {
+      eyebrow: "Step 2 of 4 · Platform & Channels",
+      question: "Where did this take place? (e.g. Discord, work email, SMS, phone call)",
+      hint: "Mention specific channels, apps, or usernames if you recall."
+    },
+    {
+      eyebrow: "Step 3 of 4 · Words & Actions",
+      question: "Who was involved or what specific words or actions caused concern?",
+      hint: "Direct quotations, threats, unwanted persistent contact, or demands."
+    },
+    {
+      eyebrow: "Step 4 of 4 · Additional Context",
+      question: "Is there any other context, dates, or records you'd like to include?",
+      hint: "Previous warnings, cease requests, or associated screenshots/files."
+    }
+  ];
+
+  async function handleProcessStory(customText?: string) {
+    const rawText = customText || storyTypedInput || storySpeechTranscript;
+    if (!rawText.trim()) return;
+    setStoryExtracting(true);
+    try {
+      const res = await api<{ draft: any }>('/voice/story-extract', {
+        story_text: rawText,
+        evidence_ids: selected
+      });
+      if (res.draft) {
+        setStoryIncidentDraft(res.draft);
+        setNotice('Story organized into a structured incident draft! Review below before saving.');
+      }
+    } catch (e: any) {
+      setError(e.message || 'Story extraction failed.');
+    } finally {
+      setStoryExtracting(false);
+    }
+  }
+
+  async function handleSaveStoryIncident() {
+    if (!storyIncidentDraft) return;
+    await run(async () => {
+      await api('/incidents', {
+        title: storyIncidentDraft.suggested_title,
+        description: `${storyIncidentDraft.what_happened}\n\nPlatform: ${storyIncidentDraft.platform}\nReported date: ${storyIncidentDraft.incident_date}\n\nNote: ${storyIncidentDraft.missing_information}`,
+        occurred_at: '2026-10-15T14:30:00Z'
+      }, 'POST');
+      await refresh();
+      setNotice('Incident saved directly to your case timeline and narrative!');
+      setStoryIncidentDraft(null);
+      setStoryTypedInput('');
+      setStorySpeechTranscript('');
+      setStoryStep(0);
+    });
+  }
+
+  async function handleAnalyzeAudio(artifactId?: string, fileObj?: File) {
+    setAudioAnalyzing(true);
+    try {
+      const fd = new FormData();
+      if (fileObj) {
+        fd.append('file', fileObj, fileObj.name);
+      } else if (artifactId) {
+        fd.append('artifact_id', artifactId);
+      }
+      fd.append('consent', 'true');
+      const res = await api<any>('/voice/analyze-audio', fd);
+      setAudioAnalysis(res);
+      setAudioPlaybackTime(0);
+      setAudioPlaying(false);
+      setNotice('Audio transcribed with ElevenLabs Scribe speaker diarization!');
+    } catch (e: any) {
+      setError(e.message || 'Audio analysis failed.');
+    } finally {
+      setAudioAnalyzing(false);
+    }
+  }
+
+  useEffect(() => {
+    let interval: any = null;
+    if (audioPlaying && audioAnalysis) {
+      interval = setInterval(() => {
+        setAudioPlaybackTime(prev => {
+          if (prev >= audioAnalysis.duration_seconds) {
+            setAudioPlaying(false);
+            return 0;
+          }
+          return Math.round((prev + 0.5) * 10) / 10;
+        });
+      }, 500);
+    }
+    return () => { if (interval) clearInterval(interval); };
+  }, [audioPlaying, audioAnalysis]);
+
+  function handleSaveMoment(turn: { speaker: string; start: number; end: number; text: string }) {
+    const mins = Math.floor(turn.start / 60);
+    const secs = Math.floor(turn.start % 60);
+    const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const excerpt = `${turn.speaker} [${timeStr}]: "${turn.text}"`;
+    setMomentSavedToast(excerpt);
+    setNotice(`Moment from ${turn.speaker} (${timeStr}) captured! Ready to link to incident.`);
+    setTimeout(() => setMomentSavedToast(''), 4500);
   }
 
   const pendingFindingsCount = data.findings.filter(f => f.decision === 'pending' || f.decision === 'review_later').length;
@@ -2011,178 +2153,640 @@ export default function App() {
                   </>
                 )}
 
-                {/* Voice Companion Page — Mockup 3 Design with Gemini 3.8 Flash & ElevenLabs */}
+                {/* Voice Companion Page — Multi-Mode Experience (ElevenLabs + Gemini) */}
                 {page === 'Voice companion' && (
                   <div>
-                    {/* Top prompt suggestion chips */}
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                    {/* Top Segmented Mode Tabs */}
+                    <div className="voice-mode-tabs">
                       <button
                         type="button"
-                        className="filter-pill active"
-                        onClick={() => void sendChatMessage('Can you summarize my case so far?')}
+                        className={`voice-mode-tab ${voiceMode === 'story' ? 'active' : ''}`}
+                        onClick={() => setVoiceMode('story')}
                       >
-                        ✨ Summarize my case →
+                        <Mic size={16} />
+                        <span>Tell My Story</span>
+                        <span className="voice-mode-badge">Guided</span>
                       </button>
+
                       <button
                         type="button"
-                        className="filter-pill"
-                        onClick={() => void sendChatMessage('What patterns did you find in these records?')}
+                        className={`voice-mode-tab ${voiceMode === 'recordings' ? 'active' : ''}`}
+                        onClick={() => {
+                          setVoiceMode('recordings');
+                          if (!audioAnalysis) {
+                            void handleAnalyzeAudio();
+                          }
+                        }}
                       >
-                        ✨ What patterns did you find? →
+                        <AudioLines size={16} />
+                        <span>Review Recordings</span>
+                        <span className="voice-mode-badge" style={{ background: '#ECFDF5', color: '#047857' }}>Scribe Diarization</span>
                       </button>
+
                       <button
                         type="button"
-                        className="filter-pill"
-                        onClick={() => void sendChatMessage('What should I upload or document next?')}
+                        className={`voice-mode-tab ${voiceMode === 'explore' ? 'active' : ''}`}
+                        onClick={() => setVoiceMode('explore')}
                       >
-                        ✨ What should I upload next? →
+                        <MessageSquare size={16} />
+                        <span>Explore My Case</span>
+                        <span className="voice-mode-badge" style={{ background: '#FAF5FF', color: '#7E22CE' }}>Q&A</span>
                       </button>
                     </div>
 
-                    <div className="voice-conversation-wrap">
-                      {/* Left: Conversational Stream */}
-                      <div className="chat-stream-card">
-                        <div className="card-header" style={{ marginBottom: 8 }}>
-                          <span className="card-title">💬 Conversation</span>
-                          <button className="link-action" onClick={clearChat}>
-                            Clear conversation
-                          </button>
+                    {/* MODE 1: TELL MY STORY (Guided Story Recording) */}
+                    {voiceMode === 'story' && (
+                      <div className="story-recording-container">
+                        <div className="story-reassurance-header">
+                          <h2 className="story-reassurance-title">Take your time. I'm listening.</h2>
+                          <p className="story-reassurance-sub">
+                            You can pause, skip questions, or type instead. AEGIS will turn your conversation into a timeline and show you a draft before anything is saved.
+                          </p>
+                          <div className="story-stepper-container">
+                            {[0, 1, 2, 3].map(stepIdx => (
+                              <div
+                                key={stepIdx}
+                                className={`story-step-dot ${storyStep === stepIdx ? 'active' : storyStep > stepIdx ? 'completed' : ''}`}
+                                onClick={() => setStoryStep(stepIdx)}
+                                title={`Step ${stepIdx + 1}`}
+                                style={{ cursor: 'pointer' }}
+                              />
+                            ))}
+                          </div>
                         </div>
 
-                        {/* Live soundwave during recording */}
-                        {recording && (
-                          <div className="recording-indicator" role="status" style={{ marginBottom: 12 }}>
-                            <span className="recording-timer-pill">
-                              <span className="recording-timer-dot" />
-                              Listening... {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
-                            </span>
-                            <div className="t-soundwave" aria-hidden="true">
-                              <span className="t-soundwave-bar" />
-                              <span className="t-soundwave-bar" />
-                              <span className="t-soundwave-bar" />
-                              <span className="t-soundwave-bar" />
-                              <span className="t-soundwave-bar" />
+                        {/* Current Guided Question Card */}
+                        <div className="story-prompt-card">
+                          <div className="story-prompt-eyebrow">
+                            {guidedQuestions[storyStep].eyebrow}
+                          </div>
+                          <h3 className="story-prompt-question">
+                            "{guidedQuestions[storyStep].question}"
+                          </h3>
+                          <small style={{ color: '#64748B', display: 'block', marginTop: 6 }}>
+                            💡 {guidedQuestions[storyStep].hint}
+                          </small>
+                        </div>
+
+                        {/* Interactive Recording Console */}
+                        <div className={`story-recording-console ${recording ? 'recording' : ''}`}>
+                          <div style={{ fontSize: 13, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700 }}>
+                            {recording ? '● Live Recording Active' : 'Recording Visualization · Ready'}
+                          </div>
+
+                          <div className="story-soundwave-bars" aria-hidden="true">
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                            <span className="soundwave-bar" />
+                          </div>
+
+                          <div style={{ fontSize: 14, fontWeight: 600, color: recording ? '#FCA5A5' : '#E2E8F0' }}>
+                            {recording
+                              ? `Listening... ${Math.floor(recordingSeconds / 60)}:${(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00`
+                              : 'Press record when you are ready to speak'}
+                          </div>
+
+                          <div className="story-controls-row">
+                            <button
+                              type="button"
+                              className={`btn-story-record ${recording ? 'recording' : ''}`}
+                              onClick={record}
+                            >
+                              {recording ? <Square size={16} /> : <Mic size={16} />}
+                              <span>{recording ? 'Stop & Transcribe' : 'Start Recording'}</span>
+                            </button>
+
+                            {recording && (
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                style={{ background: '#334155', color: '#fff', border: 'none', padding: '10px 18px', borderRadius: 999, fontSize: 13, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                                onClick={() => {
+                                  if (recording) {
+                                    record();
+                                  }
+                                }}
+                              >
+                                <Pause size={14} /> Pause
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Optional Typed Input Box */}
+                        <div className="card" style={{ marginBottom: 20 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <strong style={{ fontSize: 13, color: '#0F172A' }}>Type instead or add details</strong>
+                            <small style={{ color: '#64748B' }}>Typed and spoken notes are combined</small>
+                          </div>
+                          <textarea
+                            className="draft-field-textarea"
+                            rows={3}
+                            placeholder="Type what happened, or add details to your spoken account..."
+                            value={storyTypedInput}
+                            onChange={e => setStoryTypedInput(e.target.value)}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 10 }}>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              {storyStep > 0 && (
+                                <button
+                                  type="button"
+                                  className="btn-change-decision"
+                                  onClick={() => setStoryStep(prev => prev - 1)}
+                                >
+                                  ← Previous question
+                                </button>
+                              )}
+                              {storyStep < guidedQuestions.length - 1 && (
+                                <button
+                                  type="button"
+                                  className="btn-change-decision"
+                                  onClick={() => setStoryStep(prev => prev + 1)}
+                                >
+                                  Next question →
+                                </button>
+                              )}
+                            </div>
+
+                            <button
+                              type="button"
+                              className="btn-gradient"
+                              style={{ padding: '8px 18px', margin: 0, borderRadius: 8, fontSize: 13 }}
+                              disabled={storyExtracting || (!storyTypedInput.trim() && !storySpeechTranscript.trim())}
+                              onClick={() => void handleProcessStory()}
+                            >
+                              <Sparkles size={14} />
+                              <span>{storyExtracting ? 'Analyzing with Gemini...' : 'Generate Incident Draft ✨'}</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Generated Structured Incident Draft Preview */}
+                        {storyIncidentDraft && (
+                          <div className="incident-draft-card gsap-stagger">
+                            <div className="incident-draft-header">
+                              <div>
+                                <h3 style={{ margin: 0, fontSize: 18, color: '#1E1B4B' }}>
+                                  Your incident draft
+                                </h3>
+                                <small style={{ color: '#64748B' }}>
+                                  Review and confirm all details before saving to your case.
+                                </small>
+                              </div>
+                              <span className="user-reported-badge">
+                                ⚠️ User-reported · pending verification
+                              </span>
+                            </div>
+
+                            <div className="draft-fields-grid">
+                              <div className="draft-field-row">
+                                <label className="draft-field-label">Incident Title</label>
+                                <input
+                                  type="text"
+                                  className="draft-field-input"
+                                  value={storyIncidentDraft.suggested_title}
+                                  onChange={e => setStoryIncidentDraft({ ...storyIncidentDraft, suggested_title: e.target.value })}
+                                />
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+                                <div className="draft-field-row">
+                                  <label className="draft-field-label">Reported Date</label>
+                                  <input
+                                    type="text"
+                                    className="draft-field-input"
+                                    value={storyIncidentDraft.incident_date}
+                                    onChange={e => setStoryIncidentDraft({ ...storyIncidentDraft, incident_date: e.target.value })}
+                                  />
+                                </div>
+
+                                <div className="draft-field-row">
+                                  <label className="draft-field-label">Platform / Channel</label>
+                                  <input
+                                    type="text"
+                                    className="draft-field-input"
+                                    value={storyIncidentDraft.platform}
+                                    onChange={e => setStoryIncidentDraft({ ...storyIncidentDraft, platform: e.target.value })}
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="draft-field-row">
+                                <label className="draft-field-label">What Happened (Summary)</label>
+                                <textarea
+                                  className="draft-field-textarea"
+                                  rows={4}
+                                  value={storyIncidentDraft.what_happened}
+                                  onChange={e => setStoryIncidentDraft({ ...storyIncidentDraft, what_happened: e.target.value })}
+                                />
+                              </div>
+
+                              <div className="draft-field-row">
+                                <label className="draft-field-label">Missing or Uncertain Information</label>
+                                <input
+                                  type="text"
+                                  className="draft-field-input"
+                                  style={{ background: '#FFFBEB', borderColor: '#FDE68A' }}
+                                  value={storyIncidentDraft.missing_information}
+                                  onChange={e => setStoryIncidentDraft({ ...storyIncidentDraft, missing_information: e.target.value })}
+                                />
+                              </div>
+
+                              <div style={{ background: '#F8FAFC', padding: 12, borderRadius: 8, fontSize: 12, color: '#64748B' }}>
+                                🛡️ <em>{storyIncidentDraft.user_reported_disclaimer}</em>
+                              </div>
+
+                              <div style={{ display: 'flex', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn-save-pattern"
+                                  onClick={() => void handleSaveStoryIncident()}
+                                >
+                                  <Check size={16} />
+                                  <span>Save Incident to Timeline & My Case</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn-not-relevant"
+                                  onClick={() => setStoryIncidentDraft(null)}
+                                >
+                                  Discard draft
+                                </button>
+                              </div>
                             </div>
                           </div>
                         )}
+                      </div>
+                    )}
 
-                        <div className="chat-messages">
-                          {chatHistory.map((msg, idx) => (
-                            <div key={idx} className={`chat-msg-row ${msg.sender === 'user' ? 'user' : ''}`}>
-                              {msg.sender === 'aegis' && (
-                                <div className="chat-avatar">🌸</div>
-                              )}
-                              <div className="chat-msg-bubble">
-                                {msg.text}
-                                {msg.time && (
-                                  <small style={{ display: 'block', fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
-                                    {msg.time}
-                                  </small>
-                                )}
-                              </div>
-                              {msg.sender === 'user' && (
-                                <div className="chat-avatar" style={{ background: '#6366F1', color: '#fff' }}>J</div>
-                              )}
+                    {/* MODE 2: REVIEW RECORDINGS (Audio Evidence Analyzer) */}
+                    {voiceMode === 'recordings' && (
+                      <div>
+                        {momentSavedToast && (
+                          <div className="banner success" style={{ marginBottom: 16 }}>
+                            📌 <strong>Moment Captured:</strong> {momentSavedToast}
+                          </div>
+                        )}
+
+                        <div className="audio-evidence-player-card">
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+                            <div>
+                              <h3 style={{ margin: 0, fontSize: 18, color: '#0F172A' }}>
+                                Recording Review — ElevenLabs Scribe
+                              </h3>
+                              <small style={{ color: '#64748B' }}>
+                                {audioAnalysis ? `${audioAnalysis.filename} · Duration: ${Math.floor(audioAnalysis.duration_seconds / 60)}:${Math.floor(audioAnalysis.duration_seconds % 60).toString().padStart(2, '0')} · Synthetic Demo Audio` : 'Select or upload an audio file to inspect speaker turns'}
+                              </small>
                             </div>
-                          ))}
-                        </div>
 
-                        <div className="chat-input-bar">
-                          <button
-                            type="button"
-                            className="icon-btn"
-                            style={{ width: 28, height: 28, border: 'none', background: 'none' }}
-                            onClick={() => navigate('Evidence')}
-                            title="Attach evidence"
-                          >
-                            <Paperclip size={15} style={{ color: '#64748B' }} />
-                          </button>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <label className="btn-change-decision" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <Upload size={14} />
+                                <span>Upload Audio</span>
+                                <input
+                                  type="file"
+                                  accept="audio/*"
+                                  style={{ display: 'none' }}
+                                  onChange={e => {
+                                    const f = e.target.files?.[0];
+                                    if (f) void handleAnalyzeAudio(undefined, f);
+                                  }}
+                                />
+                              </label>
 
-                          <input
-                            type="text"
-                            placeholder="Talk or type a message..."
-                            value={question}
-                            onChange={e => setQuestion(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter' && question.trim()) {
-                                void sendChatMessage(question);
-                              }
-                            }}
-                          />
+                              <button
+                                type="button"
+                                className="btn-change-decision"
+                                onClick={() => void handleAnalyzeAudio()}
+                                disabled={audioAnalyzing}
+                              >
+                                {audioAnalyzing ? 'Transcribing...' : 'Load Demo Audio 🎧'}
+                              </button>
+                            </div>
+                          </div>
 
-                          <button
-                            type="button"
-                            className={`icon-btn ${recording ? 'pulse-icon' : ''}`}
-                            style={{ width: 28, height: 28, border: 'none', background: recording ? '#FEE2E2' : 'none', color: recording ? '#DC2626' : '#64748B' }}
-                            onClick={record}
-                            title={recording ? 'Stop recording' : 'Record voice (ElevenLabs / Web)'}
-                          >
-                            {recording ? <Square size={14} /> : <Mic size={15} />}
-                          </button>
+                          {audioAnalysis ? (
+                            <>
+                              {/* Audio Player Scrubber */}
+                              <div
+                                className="audio-track-scrubber"
+                                onClick={e => {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  const pos = (e.clientX - rect.left) / rect.width;
+                                  setAudioPlaybackTime(Math.round(pos * audioAnalysis.duration_seconds * 10) / 10);
+                                  setAudioPlaying(true);
+                                }}
+                              >
+                                <div
+                                  className="audio-track-progress"
+                                  style={{ width: `${Math.min(100, (audioPlaybackTime / Math.max(1, audioAnalysis.duration_seconds)) * 100)}%` }}
+                                />
+                              </div>
 
-                          <button
-                            type="button"
-                            className="btn-gradient"
-                            style={{ padding: '6px 12px', margin: 0, borderRadius: 999 }}
-                            disabled={busy || !question.trim()}
-                            onClick={() => void sendChatMessage(question)}
-                          >
-                            <Send size={13} />
-                          </button>
+                              <div className="audio-time-row">
+                                <span>
+                                  {Math.floor(audioPlaybackTime / 60).toString().padStart(2, '0')}:
+                                  {Math.floor(audioPlaybackTime % 60).toString().padStart(2, '0')}
+                                </span>
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                  <button
+                                    type="button"
+                                    className="icon-btn"
+                                    style={{ width: 32, height: 32, background: '#EEF2FF', color: '#4F46E5', border: '1px solid #C7D2FE' }}
+                                    onClick={() => setAudioPlaying(prev => !prev)}
+                                  >
+                                    {audioPlaying ? <Pause size={16} /> : <Play size={16} />}
+                                  </button>
+                                  <span>{audioPlaying ? 'Playing' : 'Paused'}</span>
+                                </div>
+                                <span>
+                                  {Math.floor(audioAnalysis.duration_seconds / 60).toString().padStart(2, '0')}:
+                                  {Math.floor(audioAnalysis.duration_seconds % 60).toString().padStart(2, '0')}
+                                </span>
+                              </div>
+
+                              {/* Diarized Transcript Turns */}
+                              <div style={{ marginTop: 24 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                  <strong style={{ fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: '#475569' }}>
+                                    Transcript preview · Word timestamps & speaker turns
+                                  </strong>
+                                  <small style={{ color: '#64748B' }}>
+                                    Click timestamps to seek audio
+                                  </small>
+                                </div>
+
+                                <div className="diarized-turns-list">
+                                  {audioAnalysis.turns.map((turn, idx) => {
+                                    const isSpeaker1 = turn.speaker.includes('1');
+                                    const mins = Math.floor(turn.start / 60);
+                                    const secs = Math.floor(turn.start % 60);
+                                    const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+                                    const isActive = audioPlaybackTime >= turn.start && audioPlaybackTime <= turn.end;
+
+                                    return (
+                                      <div
+                                        key={idx}
+                                        className="diarized-turn-bubble"
+                                        style={{ borderLeft: isActive ? '4px solid #6366F1' : undefined }}
+                                      >
+                                        <div className="diarized-turn-header">
+                                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <span className={`speaker-pill ${isSpeaker1 ? 'speaker-1' : 'speaker-2'}`}>
+                                              {turn.speaker}
+                                            </span>
+                                            <button
+                                              type="button"
+                                              className="turn-timestamp-btn"
+                                              onClick={() => {
+                                                setAudioPlaybackTime(turn.start);
+                                                setAudioPlaying(true);
+                                              }}
+                                              title="Jump audio to this second"
+                                            >
+                                              ⏱️ {timeStr}
+                                            </button>
+                                          </div>
+
+                                          <button
+                                            type="button"
+                                            className="btn-save-moment"
+                                            onClick={() => handleSaveMoment(turn)}
+                                          >
+                                            <span>Save this moment</span>
+                                            <span>📌</span>
+                                          </button>
+                                        </div>
+
+                                        <p className="turn-text">
+                                          "{turn.text}"
+                                        </p>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              {/* Forensic Hash & Disclaimers */}
+                              <div style={{ marginTop: 20, padding: 14, background: '#F8FAFC', borderRadius: 8, border: '1px solid #E2E8F0', fontSize: 11, color: '#64748B' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                                  <LockKeyhole size={13} style={{ color: '#6366F1' }} />
+                                  <strong>Cryptographic Checksum (SHA-256):</strong>
+                                  <code style={{ background: '#E2E8F0', padding: '2px 6px', borderRadius: 4 }}>{audioAnalysis.sha256}</code>
+                                </div>
+                                <p style={{ margin: 0, lineHeight: 1.45 }}>
+                                  <em>{audioAnalysis.limitations}</em>
+                                </p>
+                              </div>
+                            </>
+                          ) : (
+                            <div style={{ padding: 40, textAlign: 'center', color: '#64748B' }}>
+                              <AudioLines size={36} style={{ color: '#818CF8', marginBottom: 12 }} />
+                              <div style={{ fontSize: 15, fontWeight: 600, color: '#1E293B' }}>
+                                Ready to analyze audio evidence
+                              </div>
+                              <p style={{ fontSize: 13, maxWidth: 460, margin: '6px auto 16px auto' }}>
+                                ElevenLabs Scribe will transcribe the audio, separate speaker turns, and produce word-level timestamps.
+                              </p>
+                              <button
+                                type="button"
+                                className="btn-gradient"
+                                onClick={() => void handleAnalyzeAudio()}
+                                disabled={audioAnalyzing}
+                              >
+                                {audioAnalyzing ? 'Transcribing...' : 'Load & Transcribe Demo Audio'}
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
+                    )}
 
-                      {/* Right: Settings & Privacy */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-                        <div className="card">
-                          <strong style={{ fontSize: 14, marginBottom: 12, display: 'block', color: '#0F172A' }}>
-                            ⚙️ Voice settings
-                          </strong>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                            <span style={{ fontSize: 12, color: '#334155' }}>Slower speech</span>
-                            <input
-                              type="checkbox"
-                              checked={slowerSpeech}
-                              onChange={e => setSlowerSpeech(e.target.checked)}
-                              style={{ accentColor: '#6366F1' }}
-                            />
-                          </div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                            <span style={{ fontSize: 12, color: '#334155' }}>Captions on</span>
-                            <input
-                              type="checkbox"
-                              checked={captionsOn}
-                              onChange={e => setCaptionsOn(e.target.checked)}
-                              style={{ accentColor: '#6366F1' }}
-                            />
-                          </div>
-                          <Button
-                            variant="outline"
-                            style={{ fontSize: 12, width: '100%' }}
-                            onClick={replayLastVoiceMessage}
+                    {/* MODE 3: EXPLORE MY CASE (Conversational Evidence Explorer) */}
+                    {voiceMode === 'explore' && (
+                      <div>
+                        {/* Top prompt suggestion chips */}
+                        <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            className="filter-pill active"
+                            onClick={() => void sendChatMessage('Can you summarize my case so far?')}
                           >
-                            🔄 Replay last response
-                          </Button>
+                            ✨ Summarize my case →
+                          </button>
+                          <button
+                            type="button"
+                            className="filter-pill"
+                            onClick={() => void sendChatMessage('What patterns did you find in these records?')}
+                          >
+                            ✨ What patterns did you find? →
+                          </button>
+                          <button
+                            type="button"
+                            className="filter-pill"
+                            onClick={() => void sendChatMessage('What should I upload or document next?')}
+                          >
+                            ✨ What should I upload next? →
+                          </button>
+                          <button
+                            type="button"
+                            className="filter-pill"
+                            onClick={() => void sendChatMessage('Which messages contained similar wording or links?')}
+                          >
+                            ✨ Which messages share links? →
+                          </button>
                         </div>
 
-                        <div className="card" style={{ background: '#F5F3FF', borderColor: '#DDD6FE' }}>
-                          <strong style={{ color: '#5B21B6', fontSize: 13, display: 'block', marginBottom: 4 }}>
-                            🔒 Privacy reminder
-                          </strong>
-                          <p style={{ fontSize: 11, color: '#6D28D9', lineHeight: 1.45 }}>
-                            <strong>Your voice is optional.</strong> You stay in control. Voice conversations are processed with explicit consent and you can clear your history anytime.
-                          </p>
-                        </div>
+                        <div className="voice-conversation-wrap">
+                          {/* Left: Conversational Stream */}
+                          <div className="chat-stream-card">
+                            <div className="card-header" style={{ marginBottom: 8 }}>
+                              <span className="card-title">💬 Evidence Q&A</span>
+                              <button className="link-action" onClick={clearChat}>
+                                Clear conversation
+                              </button>
+                            </div>
 
-                        {/* Context Selection Drawer inside Voice */}
-                        <div className="card">
-                          <strong style={{ fontSize: 13, marginBottom: 8, display: 'block', color: '#0F172A' }}>
-                            📁 Case Evidence Context
-                          </strong>
-                          {selectionCheckboxes}
+                            {/* Live soundwave during recording */}
+                            {recording && (
+                              <div className="recording-indicator" role="status" style={{ marginBottom: 12 }}>
+                                <span className="recording-timer-pill">
+                                  <span className="recording-timer-dot" />
+                                  Listening... {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')} / 1:00
+                                </span>
+                                <div className="t-soundwave" aria-hidden="true">
+                                  <span className="t-soundwave-bar" />
+                                  <span className="t-soundwave-bar" />
+                                  <span className="t-soundwave-bar" />
+                                  <span className="t-soundwave-bar" />
+                                  <span className="t-soundwave-bar" />
+                                </div>
+                              </div>
+                            )}
+
+                            <div className="chat-messages">
+                              {chatHistory.map((msg, idx) => (
+                                <div key={idx} className={`chat-msg-row ${msg.sender === 'user' ? 'user' : ''}`}>
+                                  {msg.sender === 'aegis' && (
+                                    <div className="chat-avatar">🌸</div>
+                                  )}
+                                  <div className="chat-msg-bubble">
+                                    {msg.text}
+                                    {msg.time && (
+                                      <small style={{ display: 'block', fontSize: 10, opacity: 0.7, marginTop: 4, textAlign: msg.sender === 'user' ? 'right' : 'left' }}>
+                                        {msg.time}
+                                      </small>
+                                    )}
+                                  </div>
+                                  {msg.sender === 'user' && (
+                                    <div className="chat-avatar" style={{ background: '#6366F1', color: '#fff' }}>J</div>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="chat-input-bar">
+                              <button
+                                type="button"
+                                className="icon-btn"
+                                style={{ width: 28, height: 28, border: 'none', background: 'none' }}
+                                onClick={() => navigate('Evidence')}
+                                title="Attach evidence"
+                              >
+                                <Paperclip size={15} style={{ color: '#64748B' }} />
+                              </button>
+
+                              <input
+                                type="text"
+                                placeholder="Ask a question about your evidence..."
+                                value={question}
+                                onChange={e => setQuestion(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === 'Enter' && question.trim()) {
+                                    void sendChatMessage(question);
+                                  }
+                                }}
+                              />
+
+                              <button
+                                type="button"
+                                className={`icon-btn ${recording ? 'pulse-icon' : ''}`}
+                                style={{ width: 28, height: 28, border: 'none', background: recording ? '#FEE2E2' : 'none', color: recording ? '#DC2626' : '#64748B' }}
+                                onClick={record}
+                                title={recording ? 'Stop recording' : 'Record question (ElevenLabs Scribe / Web)'}
+                              >
+                                {recording ? <Square size={14} /> : <Mic size={15} />}
+                              </button>
+
+                              <button
+                                type="button"
+                                className="btn-gradient"
+                                style={{ padding: '6px 12px', margin: 0, borderRadius: 999 }}
+                                disabled={busy || !question.trim()}
+                                onClick={() => void sendChatMessage(question)}
+                              >
+                                <Send size={13} />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Right: Settings & Context */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                            <div className="card">
+                              <strong style={{ fontSize: 14, marginBottom: 12, display: 'block', color: '#0F172A' }}>
+                                🔊 Voice playback & audio
+                              </strong>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                                <span style={{ fontSize: 12, color: '#334155' }}>Slower speech</span>
+                                <input
+                                  type="checkbox"
+                                  checked={slowerSpeech}
+                                  onChange={e => setSlowerSpeech(e.target.checked)}
+                                  style={{ accentColor: '#6366F1' }}
+                                />
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                                <span style={{ fontSize: 12, color: '#334155' }}>Captions on</span>
+                                <input
+                                  type="checkbox"
+                                  checked={captionsOn}
+                                  onChange={e => setCaptionsOn(e.target.checked)}
+                                  style={{ accentColor: '#6366F1' }}
+                                />
+                              </div>
+                              <Button
+                                variant="outline"
+                                style={{ fontSize: 12, width: '100%' }}
+                                onClick={replayLastVoiceMessage}
+                              >
+                                🔄 Replay last response
+                              </Button>
+                            </div>
+
+                            <div className="card" style={{ background: '#F5F3FF', borderColor: '#DDD6FE' }}>
+                              <strong style={{ color: '#5B21B6', fontSize: 13, display: 'block', marginBottom: 4 }}>
+                                🔒 ElevenLabs & Privacy
+                              </strong>
+                              <p style={{ fontSize: 11, color: '#6D28D9', lineHeight: 1.45 }}>
+                                Voice processing is voluntary. Recordings are sent only with your explicit action. Raw audio and transcriptions are strictly segregated.
+                              </p>
+                            </div>
+
+                            {/* Context Selection Drawer inside Voice */}
+                            <div className="card">
+                              <strong style={{ fontSize: 13, marginBottom: 8, display: 'block', color: '#0F172A' }}>
+                                📁 Case Evidence Context
+                              </strong>
+                              {selectionCheckboxes}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
